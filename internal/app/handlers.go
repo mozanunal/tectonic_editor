@@ -1560,11 +1560,6 @@ func (s *Server) handleDeleteFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if filename == "main.tex" {
-		http.Error(w, "Cannot delete main.tex", http.StatusBadRequest)
-		return
-	}
-
 	fileInfo, err := os.Stat(filePath)
 	if os.IsNotExist(err) {
 		http.Error(w, "File not found", http.StatusNotFound)
@@ -1604,11 +1599,6 @@ func (s *Server) handleMoveFile(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid source path", http.StatusBadRequest)
 		return
 	}
-	if sourceRel == "main.tex" {
-		http.Error(w, "Cannot move main.tex", http.StatusBadRequest)
-		return
-	}
-
 	sourceInfo, err := os.Stat(sourcePath)
 	if os.IsNotExist(err) {
 		http.Error(w, "Source not found", http.StatusNotFound)

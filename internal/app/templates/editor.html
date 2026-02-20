@@ -288,6 +288,20 @@
             }
         });
 
+        monaco.languages.register({ id: 'typst' });
+        monaco.languages.setMonarchTokensProvider('typst', {
+            tokenizer: {
+                root: [
+                    [/\/\/.*$/, 'comment'],
+                    [/#(?:let|set|show|import|include|if|else|for|while|return|break|continue)\b/, 'keyword'],
+                    [/#[_a-zA-Z][_a-zA-Z0-9-]*/, 'keyword'],
+                    [/"([^"\\]|\\.)*"/, 'string'],
+                    [/[{}\[\]()]/, 'delimiter.bracket'],
+                    [/\b\d+(\.\d+)?\b/, 'number'],
+                ]
+            }
+        });
+
         editor = monaco.editor.create(document.getElementById('editor-container'), {
             value: initialContent,
             language: 'latex',
@@ -366,6 +380,7 @@
     function getLanguageForFile(filename) {
         const ext = getFileExtension(filename);
         if (ext === '.tex' || ext === '.ltx' || ext === '.sty' || ext === '.cls') return 'latex';
+        if (ext === '.typ') return 'typst';
         if (ext === '.bib' || ext === '.bst') return 'bibtex';
         return 'plaintext';
     }
@@ -461,7 +476,7 @@
             return false;
         }
 
-        if (!sourcePath || sourcePath === 'main.tex') {
+        if (!sourcePath) {
             return false;
         }
 
@@ -483,9 +498,6 @@
 
         const destinationPath = targetDirPath ? `${targetDirPath}/${getBaseName(sourcePath)}` : getBaseName(sourcePath);
         if (destinationPath === sourcePath) {
-            return false;
-        }
-        if (destinationPath === 'main.tex') {
             return false;
         }
         if (Object.prototype.hasOwnProperty.call(filesByPath, destinationPath)) {
@@ -679,7 +691,7 @@
         }
         row.appendChild(label);
 
-        if (canWrite && node.path !== 'main.tex') {
+        if (canWrite) {
             const deleteBtn = document.createElement('button');
             deleteBtn.type = 'button';
             deleteBtn.className = 'delete-btn text-red-400 hover:text-red-300 text-xs px-1';
@@ -691,7 +703,7 @@
             row.appendChild(deleteBtn);
         }
 
-        if (canWrite && node.path !== 'main.tex') {
+        if (canWrite) {
             row.draggable = true;
             row.addEventListener('dragstart', (event) => {
                 dragSourcePath = node.path;
@@ -1874,16 +1886,20 @@
 
     function lineSearchNeedle(value) {
         const normalized = normalizeSourceLine(value);
-        if (normalized.length < 6) {
+        const ext = getFileExtension(compileTarget || '');
+        const isTypst = ext === '.typ';
+        if (normalized.length < (isTypst ? 3 : 6)) {
             return '';
         }
 
-        const words = normalized.split(' ').filter(word => word.length > 2);
-        if (words.length < 2) {
+        const words = normalized
+            .split(' ')
+            .filter(word => word.length > (isTypst ? 1 : 2));
+        if (words.length < (isTypst ? 1 : 2)) {
             return '';
         }
 
-        return words.slice(0, 8).join(' ');
+        return words.slice(0, isTypst ? 6 : 8).join(' ');
     }
 
     function clampUnitInterval(value) {
@@ -1992,6 +2008,43 @@
         return pickLineFromCandidates(pageToLinesMap.get(closestPage), positionRatio);
     }
 
+    function estimatePageFromLine(lineNumber) {
+        if (!pdfDocument || !compileTarget) {
+            return null;
+        }
+
+        const source = fileContents[compileTarget] || '';
+        const lines = source.split(/\r?\n/);
+        const lineCount = lines.length;
+        const pageCount = pdfDocument.numPages || 0;
+        if (!lineCount || !pageCount) {
+            return null;
+        }
+
+        const safeLine = clampLineValue(lineNumber, 1, lineCount);
+        const ratio = (safeLine - 1) / Math.max(lineCount - 1, 1);
+        return clampLineValue(Math.round(ratio * Math.max(pageCount - 1, 0)) + 1, 1, pageCount);
+    }
+
+    function estimateLineFromPage(pageNumber, positionRatio = 0.5) {
+        if (!pdfDocument || !compileTarget) {
+            return null;
+        }
+
+        const source = fileContents[compileTarget] || '';
+        const lines = source.split(/\r?\n/);
+        const lineCount = lines.length;
+        const pageCount = pdfDocument.numPages || 0;
+        if (!lineCount || !pageCount) {
+            return null;
+        }
+
+        const safePage = clampLineValue(pageNumber, 1, pageCount);
+        const safePositionRatio = clampUnitInterval(positionRatio);
+        const ratio = ((safePage - 1) + safePositionRatio) / pageCount;
+        return clampLineValue(Math.round(ratio * Math.max(lineCount - 1, 0)) + 1, 1, lineCount);
+    }
+
     function setActivePDFPage(pageNumber, scrollIntoView = true) {
         const current = document.querySelector('#pdf-pages .pdf-page-active');
         if (current) {
@@ -2050,7 +2103,11 @@
             return;
         }
 
-        const pageNumber = closestMappedPage(lineNumber);
+        let pageNumber = closestMappedPage(lineNumber);
+        const approximate = !pageNumber;
+        if (!pageNumber) {
+            pageNumber = estimatePageFromLine(lineNumber);
+        }
         if (!pageNumber) {
             if (withMessage) {
                 setStatus('No PDF sync point found for this line', true);
@@ -2060,7 +2117,11 @@
 
         setActivePDFPage(pageNumber, true);
         if (withMessage) {
-            setStatus(`${compileTarget}:${lineNumber} -> PDF page ${pageNumber}`);
+            if (approximate) {
+                setStatus(`Approximate sync: ${compileTarget}:${lineNumber} -> PDF page ${pageNumber}`);
+            } else {
+                setStatus(`${compileTarget}:${lineNumber} -> PDF page ${pageNumber}`);
+            }
         }
     }
 
@@ -2095,7 +2156,11 @@
             }
         }
 
-        const lineNumber = closestMappedLine(pageNumber, positionRatio);
+        let lineNumber = closestMappedLine(pageNumber, positionRatio);
+        const approximate = !lineNumber;
+        if (!lineNumber) {
+            lineNumber = estimateLineFromPage(pageNumber, positionRatio);
+        }
         if (!lineNumber) {
             setStatus('No source sync point found for this PDF page', true);
             return;
@@ -2121,7 +2186,11 @@
         }, 0);
 
         setActivePDFPage(pageNumber, false);
-        setStatus(`PDF page ${pageNumber} -> ${compileTarget}:${safeLine}`);
+        if (approximate) {
+            setStatus(`Approximate sync: PDF page ${pageNumber} -> ${compileTarget}:${safeLine}`);
+        } else {
+            setStatus(`PDF page ${pageNumber} -> ${compileTarget}:${safeLine}`);
+        }
     }
 
     async function renderPDF(data) {
