@@ -27,6 +27,7 @@ func (s *Server) setupRoutes() http.Handler {
 		r.Use(s.authMiddleware)
 
 		r.Get("/", s.handleProjectsPage)
+		r.Get("/admin/users", s.handleAdminUsersPage)
 		r.Post("/projects", s.handleCreateProject)
 		r.Delete("/projects/{id}", s.handleDeleteProject)
 		r.Post("/projects/{id}/members", s.handleAddProjectMember)

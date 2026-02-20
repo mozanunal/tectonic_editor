@@ -272,44 +272,56 @@ func (s *Server) handleProjectsPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var users []UserSummary
-	if user.IsAdmin {
-		userRows, err := s.db.Query("SELECT id, email, name, is_admin FROM users ORDER BY email ASC")
-		if err != nil {
-			http.Error(w, "Failed to load users", http.StatusInternalServerError)
-			return
-		}
-		defer userRows.Close()
-
-		for userRows.Next() {
-			var candidate UserSummary
-			var name sql.NullString
-			var isAdmin int
-			if err := userRows.Scan(&candidate.ID, &candidate.Email, &name, &isAdmin); err != nil {
-				http.Error(w, "Failed to load users", http.StatusInternalServerError)
-				return
-			}
-			if name.Valid {
-				candidate.Name = name.String
-			}
-			candidate.IsAdmin = isAdmin == 1
-			users = append(users, candidate)
-		}
-		if err := userRows.Err(); err != nil {
-			http.Error(w, "Failed to load users", http.StatusInternalServerError)
-			return
-		}
-	}
-
 	pageData := PageData{
 		User:     user,
-		Users:    users,
 		Projects: projects,
 		Status:   strings.TrimSpace(r.URL.Query().Get("status")),
 		Error:    strings.TrimSpace(r.URL.Query().Get("error")),
 	}
 
 	s.templates.ExecuteTemplate(w, "projects.html", pageData)
+}
+
+func (s *Server) handleAdminUsersPage(w http.ResponseWriter, r *http.Request) {
+	user := getUserFromContext(r.Context())
+	if user == nil || !user.IsAdmin {
+		http.Error(w, "Forbidden", http.StatusForbidden)
+		return
+	}
+
+	userRows, err := s.db.Query("SELECT id, email, name, is_admin FROM users ORDER BY email ASC")
+	if err != nil {
+		http.Error(w, "Failed to load users", http.StatusInternalServerError)
+		return
+	}
+	defer userRows.Close()
+
+	var users []UserSummary
+	for userRows.Next() {
+		var candidate UserSummary
+		var name sql.NullString
+		var isAdmin int
+		if err := userRows.Scan(&candidate.ID, &candidate.Email, &name, &isAdmin); err != nil {
+			http.Error(w, "Failed to load users", http.StatusInternalServerError)
+			return
+		}
+		if name.Valid {
+			candidate.Name = name.String
+		}
+		candidate.IsAdmin = isAdmin == 1
+		users = append(users, candidate)
+	}
+	if err := userRows.Err(); err != nil {
+		http.Error(w, "Failed to load users", http.StatusInternalServerError)
+		return
+	}
+
+	s.templates.ExecuteTemplate(w, "admin_users.html", PageData{
+		User:   user,
+		Users:  users,
+		Status: strings.TrimSpace(r.URL.Query().Get("status")),
+		Error:  strings.TrimSpace(r.URL.Query().Get("error")),
+	})
 }
 
 func (s *Server) handleCreateProject(w http.ResponseWriter, r *http.Request) {
@@ -356,11 +368,11 @@ func (s *Server) handleAdminCreateUser(w http.ResponseWriter, r *http.Request) {
 	name := strings.TrimSpace(r.FormValue("name"))
 
 	if email == "" || password == "" {
-		redirectWithMessage(w, r, "/", "", "Email and password are required")
+		redirectWithMessage(w, r, "/admin/users", "", "Email and password are required")
 		return
 	}
 	if len(password) < 6 {
-		redirectWithMessage(w, r, "/", "", "Password must be at least 6 characters")
+		redirectWithMessage(w, r, "/admin/users", "", "Password must be at least 6 characters")
 		return
 	}
 
@@ -370,7 +382,7 @@ func (s *Server) handleAdminCreateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if exists {
-		redirectWithMessage(w, r, "/", "", "A user with this email already exists")
+		redirectWithMessage(w, r, "/admin/users", "", "A user with this email already exists")
 		return
 	}
 
@@ -394,7 +406,7 @@ func (s *Server) handleAdminCreateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	redirectWithMessage(w, r, "/", "User created", "")
+	redirectWithMessage(w, r, "/admin/users", "User created", "")
 }
 
 func (s *Server) handleAddProjectMember(w http.ResponseWriter, r *http.Request) {

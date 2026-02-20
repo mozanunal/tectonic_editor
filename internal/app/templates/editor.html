@@ -41,6 +41,9 @@
         <div class="h-full px-4 flex justify-between items-center">
             <div class="flex items-center gap-4">
                 <a href="/" class="text-gray-600 hover:text-gray-800">&larr; Projects</a>
+                {{if .User.IsAdmin}}
+                <a href="/admin/users" class="text-gray-600 hover:text-gray-800">Admin</a>
+                {{end}}
                 <span class="font-semibold text-gray-800">{{.Project.Name}}</span>
                 <span class="rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-700">{{.Project.AccessRole}}</span>
                 {{if ne .Project.AccessRole "owner"}}
