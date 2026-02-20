@@ -11,7 +11,9 @@ import (
 	"path"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -256,7 +258,10 @@ func (s *Server) handleCompile(w http.ResponseWriter, r *http.Request) {
 	content := r.FormValue("content")
 	workDir := filepath.Join(s.projectsDir, projectID)
 
+	compileStartedAt := time.Now()
 	pdf, output, err := s.compiler.Compile(content, workDir)
+	compileDurationMs := time.Since(compileStartedAt).Milliseconds()
+	w.Header().Set("X-Latex-Compile-Ms", strconv.FormatInt(compileDurationMs, 10))
 	if err != nil {
 		w.Header().Set("Content-Type", "text/plain")
 		w.WriteHeader(http.StatusBadRequest)
