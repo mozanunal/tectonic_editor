@@ -37,6 +37,7 @@ func (s *Server) setupRoutes() http.Handler {
 
 		r.Get("/api/projects/{id}/files", s.handleListFiles)
 		r.Post("/api/projects/{id}/files", s.handleCreateFile)
+		r.Post("/api/projects/{id}/files/move", s.handleMoveFile)
 		r.Post("/api/projects/{id}/upload", s.handleUploadFile)
 		r.Get("/api/projects/{id}/files/*", s.handleGetFile)
 		r.Put("/api/projects/{id}/files/*", s.handleUpdateFile)

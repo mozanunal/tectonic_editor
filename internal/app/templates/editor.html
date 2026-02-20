@@ -6,11 +6,33 @@
     <title>{{.Project.Name}} - Tectonic Editor</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
-        #editor-container { height: calc(100vh - 64px); }
+        #work-area { height: calc(100vh - 64px); }
+        #editor-container { height: 100%; }
+        #file-preview { height: 100%; }
         #pdf-container { height: calc(100vh - 64px); overflow: auto; }
         #file-sidebar { height: calc(100vh - 64px); }
-        .file-item:hover .delete-btn { display: block; }
-        .file-item .delete-btn { display: none; }
+        .file-tree-row:hover .delete-btn { display: block; }
+        .file-tree-row .delete-btn { display: none; }
+        .file-tree-row.drag-source { opacity: 0.5; }
+        .file-tree-drop-target { background: rgba(59, 130, 246, 0.25); }
+        .file-tree-drop-target-root {
+            outline: 1px dashed rgba(147, 197, 253, 0.9);
+            background: rgba(59, 130, 246, 0.2);
+        }
+        .pdf-page {
+            cursor: pointer;
+            border: 2px solid transparent;
+            background: white;
+            transition: border-color 0.15s ease, box-shadow 0.15s ease;
+        }
+        .pdf-page:hover { border-color: #93c5fd; }
+        .pdf-page-active {
+            border-color: #2563eb !important;
+            box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.2);
+        }
+        .monaco-editor .source-line-highlight {
+            background: rgba(37, 99, 235, 0.2);
+        }
     </style>
 </head>
 <body class="bg-gray-100">
@@ -24,6 +46,10 @@
             </div>
             <div class="flex items-center gap-2">
                 <span id="status" class="text-sm text-gray-500"></span>
+                <button id="show-in-pdf-btn"
+                    class="bg-gray-100 text-gray-700 py-2 px-4 rounded hover:bg-gray-200 transition">
+                    Show in PDF
+                </button>
                 <button id="save-btn"
                     class="bg-gray-100 text-gray-700 py-2 px-4 rounded hover:bg-gray-200 transition">
                     Save
@@ -38,23 +64,45 @@
 
     <div class="flex-1 flex overflow-hidden">
         <div id="file-sidebar" class="w-56 bg-gray-800 text-gray-100 flex flex-col flex-shrink-0">
-            <div class="p-2 border-b border-gray-700 flex gap-1">
-                <button id="new-file-btn" class="flex-1 text-xs bg-gray-700 hover:bg-gray-600 px-2 py-1 rounded">
-                    + New File
-                </button>
-                <button id="upload-btn" class="flex-1 text-xs bg-gray-700 hover:bg-gray-600 px-2 py-1 rounded">
-                    Upload
+            <div class="p-2 border-b border-gray-700 space-y-1">
+                <div class="flex gap-1">
+                    <button id="new-file-btn" class="flex-1 text-xs bg-gray-700 hover:bg-gray-600 px-2 py-1 rounded">
+                        + New File
+                    </button>
+                    <button id="upload-btn" class="flex-1 text-xs bg-gray-700 hover:bg-gray-600 px-2 py-1 rounded">
+                        Upload
+                    </button>
+                </div>
+                <button id="new-folder-btn" class="w-full text-xs bg-gray-700 hover:bg-gray-600 px-2 py-1 rounded">
+                    + New Folder
                 </button>
             </div>
             <div id="file-list" class="flex-1 overflow-auto p-2 space-y-1">
             </div>
         </div>
 
-        <div id="editor-container" class="flex-1 border-r"></div>
+        <div id="work-area" class="flex-1 border-r">
+            <div id="editor-container"></div>
+            <div id="file-preview" class="hidden bg-white"></div>
+        </div>
 
-        <div id="pdf-container" class="w-2/5 bg-gray-200 overflow-auto p-4">
-            <div id="pdf-placeholder" class="h-full flex items-center justify-center text-gray-500">Click "Compile" to generate PDF</div>
-            <div id="pdf-pages" class="hidden flex flex-col items-center gap-4"></div>
+        <div id="pdf-container" class="w-2/5 bg-gray-200 overflow-auto relative">
+            <div id="pdf-toolbar" class="hidden sticky top-0 z-10 border-b border-gray-300 bg-gray-200/95 backdrop-blur px-3 py-2 flex items-center justify-between">
+                <div class="flex items-center gap-2">
+                    <button id="pdf-zoom-out" class="px-2 py-1 rounded bg-white border border-gray-300 hover:bg-gray-50 text-sm">-</button>
+                    <button id="pdf-zoom-reset" class="px-2 py-1 rounded bg-white border border-gray-300 hover:bg-gray-50 text-sm">
+                        <span id="pdf-zoom-label">100%</span>
+                    </button>
+                    <button id="pdf-zoom-in" class="px-2 py-1 rounded bg-white border border-gray-300 hover:bg-gray-50 text-sm">+</button>
+                    <button id="pdf-fit-width" class="px-2 py-1 rounded bg-white border border-gray-300 hover:bg-gray-50 text-sm">Fit Width</button>
+                </div>
+                <span class="text-xs text-gray-600">Click a PDF page to jump to TeX</span>
+            </div>
+            <div class="p-4">
+                <div id="pdf-placeholder" class="h-full flex items-center justify-center text-gray-500">Click "Compile" to generate PDF</div>
+                <div id="pdf-pages" class="hidden flex flex-col items-center gap-4"></div>
+            </div>
+            <div id="pdf-render-stat" class="hidden pointer-events-none absolute bottom-3 right-3 rounded bg-black/70 px-2 py-1 text-xs text-white">Render: --</div>
         </div>
     </div>
 
@@ -87,10 +135,32 @@
 
     const projectId = '{{.Project.ID}}';
     const initialContent = {{.Content}};
+    const MIN_PDF_ZOOM = 0.4;
+    const MAX_PDF_ZOOM = 3;
     let editor;
     let currentFile = 'main.tex';
+    let currentFileIsText = true;
+    let currentPreviewURL = null;
+    let fileList = [];
+    let filesByPath = {};
     let fileContents = {};
     let unsavedChanges = {};
+    let expandedFolders = new Set(['']);
+    let dragSourcePath = null;
+    let dragPreviewElement = null;
+    let pdfDocument = null;
+    let pdfZoom = 1;
+    let pdfRenderToken = 0;
+    let lastPDFRenderMs = null;
+    let pageTextMap = new Map();
+    let lineToPageMap = new Map();
+    let pageToLinesMap = new Map();
+    let activePDFPage = null;
+    let lineHighlightDecorations = [];
+    let lineHighlightTimer = null;
+    let suppressEditorPDFSync = false;
+    let suppressEditorChangeTracking = false;
+    let pdfResizeTimer = null;
 
     fileContents['main.tex'] = initialContent;
 
@@ -136,9 +206,22 @@
         });
 
         editor.onDidChangeModelContent(() => {
+            if (suppressEditorChangeTracking || !currentFileIsText) {
+                return;
+            }
             fileContents[currentFile] = editor.getValue();
             unsavedChanges[currentFile] = true;
             updateFileList();
+        });
+
+        editor.onDidChangeCursorPosition((e) => {
+            if (suppressEditorPDFSync || !pdfDocument || currentFile !== 'main.tex') {
+                return;
+            }
+            if (e.source !== 'mouse') {
+                return;
+            }
+            showLineInPDF(e.position.lineNumber);
         });
 
         editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, function () {
@@ -149,8 +232,17 @@
             compile();
         });
 
+        editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.Enter, function () {
+            showCurrentLineInPDF();
+        });
+
         loadFileList();
     });
+
+    function buildFileURL(filename) {
+        const encoded = filename.split('/').map(encodeURIComponent).join('/');
+        return `/api/projects/${projectId}/files/${encoded}`;
+    }
 
     function getLanguageForFile(filename) {
         if (filename.endsWith('.tex') || filename.endsWith('.sty') || filename.endsWith('.cls')) return 'latex';
@@ -158,58 +250,405 @@
         return 'plaintext';
     }
 
-    async function loadFileList() {
-        const response = await fetch(`/api/projects/${projectId}/files`);
-        const files = await response.json();
-        renderFileList(files);
+    function getParentPath(path) {
+        const separatorIndex = path.lastIndexOf('/');
+        return separatorIndex === -1 ? '' : path.slice(0, separatorIndex);
+    }
+
+    function getBaseName(path) {
+        const separatorIndex = path.lastIndexOf('/');
+        return separatorIndex === -1 ? path : path.slice(separatorIndex + 1);
+    }
+
+    function normalizeClientPath(path) {
+        return path
+            .split('/')
+            .filter(segment => segment && segment !== '.')
+            .join('/');
+    }
+
+    function ensureFolderExpanded(path) {
+        if (!path) {
+            expandedFolders.add('');
+            return;
+        }
+        let current = '';
+        path.split('/').forEach(segment => {
+            if (!segment) return;
+            current = current ? `${current}/${segment}` : segment;
+            expandedFolders.add(current);
+        });
+        expandedFolders.add('');
+    }
+
+    function normalizeFiles(files) {
+        return files
+            .map(file => {
+                const path = file.path || file.name;
+                if (!path) return null;
+                return { ...file, path, name: file.name || path };
+            })
+            .filter(Boolean);
+    }
+
+    function buildFileTree(files) {
+        const root = { path: '', name: '', isDir: true, children: new Map(), file: null };
+
+        files.forEach(file => {
+            const parts = file.path.split('/').filter(Boolean);
+            let current = root;
+            let currentPath = '';
+
+            parts.forEach((part, index) => {
+                currentPath = currentPath ? `${currentPath}/${part}` : part;
+                const isLeaf = index === parts.length - 1;
+                if (!current.children.has(part)) {
+                    current.children.set(part, {
+                        path: currentPath,
+                        name: part,
+                        isDir: !isLeaf || file.isDir,
+                        children: new Map(),
+                        file: isLeaf ? file : null,
+                    });
+                }
+
+                const child = current.children.get(part);
+                if (isLeaf) {
+                    child.isDir = !!file.isDir;
+                    child.file = file;
+                }
+                if (!isLeaf) {
+                    child.isDir = true;
+                }
+                current = child;
+            });
+        });
+
+        return root;
+    }
+
+    function sortedChildren(node) {
+        return Array.from(node.children.values()).sort((a, b) => {
+            if (a.isDir !== b.isDir) {
+                return a.isDir ? -1 : 1;
+            }
+            return a.name.localeCompare(b.name);
+        });
+    }
+
+    function canDropPath(sourcePath, targetDirPath) {
+        if (!sourcePath || sourcePath === 'main.tex') {
+            return false;
+        }
+
+        const source = filesByPath[sourcePath];
+        if (!source) {
+            return false;
+        }
+
+        if (targetDirPath) {
+            const target = filesByPath[targetDirPath];
+            if (!target || !target.isDir) {
+                return false;
+            }
+        }
+
+        if (source.isDir && targetDirPath && (targetDirPath === sourcePath || targetDirPath.startsWith(`${sourcePath}/`))) {
+            return false;
+        }
+
+        const destinationPath = targetDirPath ? `${targetDirPath}/${getBaseName(sourcePath)}` : getBaseName(sourcePath);
+        if (destinationPath === sourcePath) {
+            return false;
+        }
+        if (destinationPath === 'main.tex') {
+            return false;
+        }
+        if (Object.prototype.hasOwnProperty.call(filesByPath, destinationPath)) {
+            return false;
+        }
+
+        return true;
+    }
+
+    function clearDropHighlights() {
+        document.querySelectorAll('.file-tree-drop-target').forEach(el => el.classList.remove('file-tree-drop-target'));
+        document.querySelectorAll('.file-tree-drop-target-root').forEach(el => el.classList.remove('file-tree-drop-target-root'));
+    }
+
+    function attachDropTarget(element, targetDirPath, isRoot = false) {
+        element.addEventListener('dragover', (event) => {
+            const sourcePath = dragSourcePath || event.dataTransfer.getData('text/plain');
+            if (!canDropPath(sourcePath, targetDirPath)) {
+                return;
+            }
+
+            event.preventDefault();
+            event.dataTransfer.dropEffect = 'move';
+            clearDropHighlights();
+            element.classList.add(isRoot ? 'file-tree-drop-target-root' : 'file-tree-drop-target');
+        });
+
+        element.addEventListener('dragleave', () => {
+            element.classList.remove('file-tree-drop-target');
+            element.classList.remove('file-tree-drop-target-root');
+        });
+
+        element.addEventListener('drop', async (event) => {
+            event.preventDefault();
+            clearDropHighlights();
+            const sourcePath = dragSourcePath || event.dataTransfer.getData('text/plain');
+            if (!canDropPath(sourcePath, targetDirPath)) {
+                return;
+            }
+            await movePath(sourcePath, targetDirPath);
+        });
+    }
+
+    function remapPathState(previousPath, nextPath) {
+        const pathPrefix = `${previousPath}/`;
+
+        Object.keys(fileContents).forEach(path => {
+            if (path === previousPath || path.startsWith(pathPrefix)) {
+                const suffix = path.slice(previousPath.length);
+                const mappedPath = `${nextPath}${suffix}`;
+                fileContents[mappedPath] = fileContents[path];
+                delete fileContents[path];
+            }
+        });
+
+        Object.keys(unsavedChanges).forEach(path => {
+            if (path === previousPath || path.startsWith(pathPrefix)) {
+                const suffix = path.slice(previousPath.length);
+                const mappedPath = `${nextPath}${suffix}`;
+                unsavedChanges[mappedPath] = true;
+                delete unsavedChanges[path];
+            }
+        });
+
+        if (currentFile === previousPath || currentFile.startsWith(pathPrefix)) {
+            const suffix = currentFile.slice(previousPath.length);
+            currentFile = `${nextPath}${suffix}`;
+            document.getElementById('current-file').textContent = currentFile;
+        }
+
+        const updatedExpanded = new Set();
+        expandedFolders.forEach(path => {
+            if (path === previousPath || path.startsWith(pathPrefix)) {
+                const suffix = path.slice(previousPath.length);
+                updatedExpanded.add(`${nextPath}${suffix}`);
+            } else {
+                updatedExpanded.add(path);
+            }
+        });
+        expandedFolders = updatedExpanded;
+        ensureFolderExpanded(getParentPath(currentFile));
+        ensureFolderExpanded(getParentPath(nextPath));
+    }
+
+    async function movePath(sourcePath, targetDirPath) {
+        if (!canDropPath(sourcePath, targetDirPath)) {
+            return;
+        }
+
+        const targetPath = targetDirPath ? `${targetDirPath}/${getBaseName(sourcePath)}` : getBaseName(sourcePath);
+        setStatus(`Moving ${sourcePath}...`);
+
+        try {
+            const response = await fetch(`/api/projects/${projectId}/files/move`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: `source=${encodeURIComponent(sourcePath)}&targetDir=${encodeURIComponent(targetDirPath || '')}`,
+            });
+
+            if (!response.ok) {
+                setStatus('Failed to move item', true);
+                return;
+            }
+
+            let nextPath = targetPath;
+            try {
+                const payload = await response.json();
+                if (payload && payload.path) {
+                    nextPath = payload.path;
+                }
+            } catch (_) {}
+
+            remapPathState(sourcePath, nextPath);
+            await loadFileList();
+
+            if (!filesByPath[currentFile] || filesByPath[currentFile].isDir) {
+                if (filesByPath['main.tex']) {
+                    await openFile('main.tex');
+                }
+            } else {
+                await openFile(currentFile);
+            }
+
+            setStatus(`Moved to ${nextPath}`);
+        } catch (_) {
+            setStatus('Failed to move item', true);
+        }
+    }
+
+    function renderTreeNode(container, node, depth) {
+        const row = document.createElement('div');
+        row.className = 'file-tree-row flex items-center gap-1 rounded py-1 pr-1';
+        row.style.paddingLeft = `${8 + depth * 14}px`;
+
+        if (node.path === currentFile) {
+            row.classList.add('bg-gray-600');
+        } else {
+            row.classList.add('hover:bg-gray-700');
+        }
+        if (node.path === dragSourcePath) {
+            row.classList.add('drag-source');
+        }
+
+        const toggle = document.createElement('button');
+        toggle.type = 'button';
+        toggle.className = 'w-4 text-xs text-gray-400';
+        toggle.textContent = node.isDir ? (expandedFolders.has(node.path) ? 'v' : '>') : '';
+        if (node.isDir) {
+            toggle.onclick = (event) => {
+                event.stopPropagation();
+                if (expandedFolders.has(node.path)) {
+                    expandedFolders.delete(node.path);
+                } else {
+                    expandedFolders.add(node.path);
+                }
+                renderFileList(fileList);
+            };
+        } else {
+            toggle.disabled = true;
+        }
+        row.appendChild(toggle);
+
+        const label = document.createElement('span');
+        label.className = 'text-sm truncate flex-1';
+        if (node.isDir) {
+            label.className += ' text-gray-300';
+            label.textContent = `${node.name}/`;
+            label.onclick = () => {
+                if (expandedFolders.has(node.path)) {
+                    expandedFolders.delete(node.path);
+                } else {
+                    expandedFolders.add(node.path);
+                }
+                renderFileList(fileList);
+            };
+            attachDropTarget(row, node.path);
+        } else {
+            label.textContent = node.name + (unsavedChanges[node.path] ? ' *' : '');
+            label.onclick = () => openFile(node.path);
+            if (!node.file.isText) {
+                label.className += ' text-blue-200';
+                label.title = 'Preview-only file';
+            }
+        }
+        row.appendChild(label);
+
+        if (node.path !== 'main.tex') {
+            const deleteBtn = document.createElement('button');
+            deleteBtn.type = 'button';
+            deleteBtn.className = 'delete-btn text-red-400 hover:text-red-300 text-xs px-1';
+            deleteBtn.textContent = 'x';
+            deleteBtn.onclick = (event) => {
+                event.stopPropagation();
+                deleteFile(node.path);
+            };
+            row.appendChild(deleteBtn);
+        }
+
+        if (node.path !== 'main.tex') {
+            row.draggable = true;
+            row.addEventListener('dragstart', (event) => {
+                dragSourcePath = node.path;
+                dragPreviewElement = row;
+                row.classList.add('drag-source');
+                event.dataTransfer.effectAllowed = 'move';
+                event.dataTransfer.setData('text/plain', node.path);
+            });
+            row.addEventListener('dragend', () => {
+                dragSourcePath = null;
+                if (dragPreviewElement) {
+                    dragPreviewElement.classList.remove('drag-source');
+                    dragPreviewElement = null;
+                }
+                clearDropHighlights();
+            });
+        }
+
+        container.appendChild(row);
+
+        if (node.isDir && expandedFolders.has(node.path)) {
+            sortedChildren(node).forEach(child => renderTreeNode(container, child, depth + 1));
+        }
     }
 
     function renderFileList(files) {
         const container = document.getElementById('file-list');
         container.innerHTML = '';
 
-        files.forEach(file => {
-            const div = document.createElement('div');
-            div.className = 'file-item flex items-center justify-between px-2 py-1 rounded cursor-pointer hover:bg-gray-700' +
-                (file.name === currentFile ? ' bg-gray-600' : '');
+        const rootDropZone = document.createElement('div');
+        rootDropZone.className = 'rounded border border-dashed border-gray-600 px-2 py-1 text-[11px] text-gray-400';
+        rootDropZone.textContent = 'Drop here to move item to project root';
+        attachDropTarget(rootDropZone, '', true);
+        container.appendChild(rootDropZone);
 
-            const nameSpan = document.createElement('span');
-            nameSpan.className = 'text-sm truncate flex-1';
-            nameSpan.textContent = file.name + (unsavedChanges[file.name] ? ' *' : '');
-
-            if (file.isText) {
-                nameSpan.onclick = () => openFile(file.name);
-            } else {
-                nameSpan.className += ' text-gray-400';
-                nameSpan.title = 'Binary file';
-            }
-
-            div.appendChild(nameSpan);
-
-            if (file.name !== 'main.tex') {
-                const deleteBtn = document.createElement('button');
-                deleteBtn.className = 'delete-btn text-red-400 hover:text-red-300 text-xs px-1';
-                deleteBtn.textContent = 'x';
-                deleteBtn.onclick = (e) => {
-                    e.stopPropagation();
-                    deleteFile(file.name);
-                };
-                div.appendChild(deleteBtn);
-            }
-
-            container.appendChild(div);
-        });
+        const tree = buildFileTree(files);
+        sortedChildren(tree).forEach(node => renderTreeNode(container, node, 0));
     }
 
     function updateFileList() {
-        loadFileList();
+        renderFileList(fileList);
+    }
+
+    async function loadFileList() {
+        try {
+            const response = await fetch(`/api/projects/${projectId}/files`);
+            if (!response.ok) {
+                setStatus('Failed to load files', true);
+                return;
+            }
+
+            fileList = normalizeFiles(await response.json());
+            filesByPath = {};
+            fileList.forEach(file => {
+                filesByPath[file.path] = file;
+            });
+
+            ensureFolderExpanded(getParentPath(currentFile));
+            renderFileList(fileList);
+        } catch (_) {
+            setStatus('Failed to load files', true);
+        }
     }
 
     async function openFile(filename) {
-        if (filename === currentFile) return;
+        const file = filesByPath[filename];
+        if (!file || file.isDir) return;
+        if (filename === currentFile && file.isText === currentFileIsText) return;
 
-        if (!fileContents[filename]) {
-            const response = await fetch(`/api/projects/${projectId}/files/${filename}`);
+        currentFile = filename;
+        currentFileIsText = file.isText;
+        ensureFolderExpanded(getParentPath(filename));
+        document.getElementById('current-file').textContent = filename;
+        updateFileList();
+
+        if (file.isText) {
+            await openTextFile(filename);
+        } else {
+            await openBinaryFile(filename, file.contentType || '');
+        }
+    }
+
+    async function openTextFile(filename) {
+        showEditor();
+        setSaveEnabled(true);
+
+        if (!Object.prototype.hasOwnProperty.call(fileContents, filename)) {
+            const response = await fetch(buildFileURL(filename));
             if (!response.ok) {
                 setStatus('Failed to load file', true);
                 return;
@@ -217,23 +656,214 @@
             fileContents[filename] = await response.text();
         }
 
-        currentFile = filename;
-        document.getElementById('current-file').textContent = filename;
-
         const model = editor.getModel();
         monaco.editor.setModelLanguage(model, getLanguageForFile(filename));
-        editor.setValue(fileContents[filename]);
+        suppressEditorChangeTracking = true;
+        editor.setValue(fileContents[filename] || '');
+        suppressEditorChangeTracking = false;
+        editor.layout();
+        editor.focus();
+    }
 
-        loadFileList();
+    async function openBinaryFile(filename, hintedContentType = '') {
+        showPreview();
+        setSaveEnabled(false);
+
+        const preview = document.getElementById('file-preview');
+        preview.innerHTML = '<div class="h-full flex items-center justify-center text-gray-500">Loading preview...</div>';
+
+        try {
+            const response = await fetch(buildFileURL(filename));
+            if (!response.ok) {
+                preview.innerHTML = '<div class="h-full flex items-center justify-center text-red-500">Failed to load preview.</div>';
+                setStatus('Failed to load file', true);
+                return;
+            }
+
+            const blob = await response.blob();
+            const contentType = resolveContentType(
+                filename,
+                response.headers.get('Content-Type') || hintedContentType || blob.type,
+            );
+            await renderBinaryPreview(blob, filename, contentType);
+            setStatus(`Previewing ${filename}`);
+        } catch (e) {
+            preview.innerHTML = '<div class="h-full flex items-center justify-center text-red-500">Failed to load preview.</div>';
+            setStatus('Failed to load file', true);
+        }
+    }
+
+    function showEditor() {
+        clearFilePreview();
+        document.getElementById('file-preview').classList.add('hidden');
+        document.getElementById('editor-container').classList.remove('hidden');
+    }
+
+    function showPreview() {
+        document.getElementById('editor-container').classList.add('hidden');
+        document.getElementById('file-preview').classList.remove('hidden');
+    }
+
+    function setSaveEnabled(enabled) {
+        const saveBtn = document.getElementById('save-btn');
+        if (enabled) {
+            saveBtn.disabled = false;
+            saveBtn.className = 'bg-gray-100 text-gray-700 py-2 px-4 rounded hover:bg-gray-200 transition';
+        } else {
+            saveBtn.disabled = true;
+            saveBtn.className = 'bg-gray-200 text-gray-400 py-2 px-4 rounded cursor-not-allowed';
+        }
+    }
+
+    function clearFilePreview() {
+        if (currentPreviewURL) {
+            URL.revokeObjectURL(currentPreviewURL);
+            currentPreviewURL = null;
+        }
+        document.getElementById('file-preview').innerHTML = '';
+    }
+
+    function normalizeContentType(contentType) {
+        if (!contentType) return '';
+        return contentType.split(';')[0].trim().toLowerCase();
+    }
+
+    function guessContentTypeFromFilename(filename) {
+        const ext = filename.includes('.') ? filename.split('.').pop().toLowerCase() : '';
+        const map = {
+            png: 'image/png',
+            jpg: 'image/jpeg',
+            jpeg: 'image/jpeg',
+            gif: 'image/gif',
+            webp: 'image/webp',
+            svg: 'image/svg+xml',
+            ico: 'image/x-icon',
+            bmp: 'image/bmp',
+            pdf: 'application/pdf',
+            mp4: 'video/mp4',
+            webm: 'video/webm',
+            mov: 'video/quicktime',
+            mp3: 'audio/mpeg',
+            wav: 'audio/wav',
+            ogg: 'audio/ogg',
+            txt: 'text/plain',
+            md: 'text/markdown',
+            json: 'application/json',
+            csv: 'text/csv',
+            xml: 'application/xml',
+            html: 'text/html',
+        };
+
+        return map[ext] || 'application/octet-stream';
+    }
+
+    function resolveContentType(filename, contentType) {
+        const normalized = normalizeContentType(contentType);
+        if (normalized && normalized !== 'application/octet-stream') {
+            return normalized;
+        }
+        return guessContentTypeFromFilename(filename);
+    }
+
+    function isTextualContentType(contentType) {
+        if (!contentType) return false;
+        if (contentType.startsWith('text/')) return true;
+        return [
+            'application/json',
+            'application/xml',
+            'application/javascript',
+            'application/x-yaml',
+        ].includes(contentType);
+    }
+
+    function formatBytes(size) {
+        if (size < 1024) return `${size} B`;
+        if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+        return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+    }
+
+    async function renderBinaryPreview(blob, filename, contentType) {
+        clearFilePreview();
+
+        const preview = document.getElementById('file-preview');
+        const wrapper = document.createElement('div');
+        wrapper.className = 'h-full flex flex-col p-4 gap-3 overflow-auto';
+
+        const header = document.createElement('div');
+        header.className = 'text-sm text-gray-600';
+        header.textContent = `${filename} (${contentType || 'unknown'}, ${formatBytes(blob.size)})`;
+        wrapper.appendChild(header);
+
+        const content = document.createElement('div');
+        content.className = 'flex-1 min-h-0';
+        wrapper.appendChild(content);
+
+        const objectURL = URL.createObjectURL(blob);
+        currentPreviewURL = objectURL;
+
+        if (contentType.startsWith('image/')) {
+            const img = document.createElement('img');
+            img.src = objectURL;
+            img.alt = filename;
+            img.className = 'max-w-full max-h-full mx-auto rounded border bg-gray-50';
+            content.className = 'flex-1 min-h-0 flex items-center justify-center';
+            content.appendChild(img);
+        } else if (contentType === 'application/pdf') {
+            const iframe = document.createElement('iframe');
+            iframe.src = objectURL;
+            iframe.className = 'w-full h-full border rounded bg-white';
+            content.appendChild(iframe);
+        } else if (contentType.startsWith('audio/')) {
+            const audio = document.createElement('audio');
+            audio.src = objectURL;
+            audio.controls = true;
+            audio.className = 'w-full';
+            content.className = 'flex-1 min-h-0 flex items-start';
+            content.appendChild(audio);
+        } else if (contentType.startsWith('video/')) {
+            const video = document.createElement('video');
+            video.src = objectURL;
+            video.controls = true;
+            video.className = 'max-w-full max-h-full rounded bg-black';
+            content.className = 'flex-1 min-h-0 flex items-center justify-center';
+            content.appendChild(video);
+        } else if (isTextualContentType(contentType)) {
+            const text = await blob.text();
+            const pre = document.createElement('pre');
+            pre.className = 'h-full overflow-auto bg-gray-900 text-gray-100 p-4 rounded text-sm whitespace-pre-wrap break-words';
+            pre.textContent = text;
+            content.appendChild(pre);
+        } else {
+            const unsupported = document.createElement('div');
+            unsupported.className = 'h-full flex flex-col items-center justify-center gap-2 text-gray-600';
+            unsupported.innerHTML = '<p>No inline preview for this file type.</p>';
+
+            const link = document.createElement('a');
+            link.href = objectURL;
+            link.target = '_blank';
+            link.rel = 'noopener noreferrer';
+            link.download = filename;
+            link.className = 'text-blue-600 hover:text-blue-800 underline';
+            link.textContent = 'Open or download file';
+            unsupported.appendChild(link);
+            content.appendChild(unsupported);
+        }
+
+        preview.appendChild(wrapper);
     }
 
     async function save() {
+        if (!currentFileIsText) {
+            setStatus('Preview-only file: save is disabled');
+            return;
+        }
+
         setStatus('Saving...');
         const content = editor.getValue();
         fileContents[currentFile] = content;
 
         try {
-            const response = await fetch(`/api/projects/${projectId}/files/${currentFile}`, {
+            const response = await fetch(buildFileURL(currentFile), {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
                 body: `content=${encodeURIComponent(content)}`
@@ -254,19 +884,25 @@
     async function saveAll() {
         for (const filename of Object.keys(unsavedChanges)) {
             const content = fileContents[filename];
-            await fetch(`/api/projects/${projectId}/files/${filename}`, {
+            const response = await fetch(buildFileURL(filename), {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
                 body: `content=${encodeURIComponent(content)}`
             });
+            if (!response.ok) {
+                setStatus(`Failed to save ${filename}`, true);
+                return false;
+            }
         }
         unsavedChanges = {};
         updateFileList();
+        return true;
     }
 
     async function compile() {
         setStatus('Saving all files...');
-        await saveAll();
+        const saved = await saveAll();
+        if (!saved) return;
 
         setStatus('Compiling...');
         hideError();
@@ -285,7 +921,7 @@
 
             if (response.ok) {
                 const pdfData = await response.arrayBuffer();
-                renderPDF(pdfData);
+                await renderPDF(pdfData);
                 setStatus('Compiled successfully');
             } else {
                 const errorText = await response.text();
@@ -304,20 +940,67 @@
     async function deleteFile(filename) {
         if (!confirm(`Delete ${filename}?`)) return;
 
-        const response = await fetch(`/api/projects/${projectId}/files/${filename}`, {
+        const response = await fetch(buildFileURL(filename), {
             method: 'DELETE'
         });
 
         if (response.ok) {
-            delete fileContents[filename];
-            delete unsavedChanges[filename];
-            if (currentFile === filename) {
-                openFile('main.tex');
+            const pathPrefix = `${filename}/`;
+            Object.keys(fileContents).forEach(path => {
+                if (path === filename || path.startsWith(pathPrefix)) {
+                    delete fileContents[path];
+                }
+            });
+            Object.keys(unsavedChanges).forEach(path => {
+                if (path === filename || path.startsWith(pathPrefix)) {
+                    delete unsavedChanges[path];
+                }
+            });
+
+            const nextExpanded = new Set();
+            expandedFolders.forEach(path => {
+                if (path !== filename && !path.startsWith(pathPrefix)) {
+                    nextExpanded.add(path);
+                }
+            });
+            expandedFolders = nextExpanded;
+            expandedFolders.add('');
+
+            const deletedCurrent = currentFile === filename || currentFile.startsWith(pathPrefix);
+            await loadFileList();
+
+            if (deletedCurrent && filesByPath['main.tex']) {
+                await openFile('main.tex');
             }
-            loadFileList();
+            setStatus(`${filename} deleted`);
         } else {
             setStatus('Failed to delete file', true);
         }
+    }
+
+    async function createEntry(rawPath, type = 'file') {
+        const normalizedPath = normalizeClientPath(rawPath.trim());
+        if (!normalizedPath) {
+            return '';
+        }
+
+        const response = await fetch(`/api/projects/${projectId}/files`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: `filename=${encodeURIComponent(normalizedPath)}&type=${encodeURIComponent(type)}`
+        });
+
+        if (!response.ok) {
+            return '';
+        }
+
+        if (type !== 'dir') {
+            fileContents[normalizedPath] = '';
+        }
+
+        ensureFolderExpanded(getParentPath(normalizedPath));
+        await loadFileList();
+        return normalizedPath;
     }
 
     document.getElementById('new-file-btn').onclick = () => {
@@ -334,26 +1017,34 @@
         const filename = document.getElementById('new-file-name').value.trim();
         if (!filename) return;
 
-        const response = await fetch(`/api/projects/${projectId}/files`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-            body: `filename=${encodeURIComponent(filename)}`
-        });
-
-        if (response.ok) {
-            document.getElementById('new-file-modal').classList.add('hidden');
-            document.getElementById('new-file-name').value = '';
-            fileContents[filename] = '';
-            await loadFileList();
-            openFile(filename);
-        } else {
+        const createdPath = await createEntry(filename, 'file');
+        if (!createdPath) {
             alert('Failed to create file');
+            return;
         }
+
+        document.getElementById('new-file-modal').classList.add('hidden');
+        document.getElementById('new-file-name').value = '';
+        await openFile(createdPath);
     };
 
     document.getElementById('new-file-name').onkeydown = (e) => {
         if (e.key === 'Enter') document.getElementById('confirm-new-file').click();
         if (e.key === 'Escape') document.getElementById('cancel-new-file').click();
+    };
+
+    document.getElementById('new-folder-btn').onclick = async () => {
+        const folderName = prompt('Folder name (e.g. chapters/section1)');
+        if (!folderName) return;
+
+        const createdPath = await createEntry(folderName, 'dir');
+        if (!createdPath) {
+            alert('Failed to create folder');
+            return;
+        }
+        expandedFolders.add(createdPath);
+        updateFileList();
+        setStatus(`Folder created: ${createdPath}`);
     };
 
     document.getElementById('upload-btn').onclick = () => {
@@ -372,7 +1063,7 @@
             });
         }
         e.target.value = '';
-        loadFileList();
+        await loadFileList();
         setStatus('Files uploaded');
     };
 
@@ -392,39 +1083,406 @@
     }
 
     document.getElementById('close-error').addEventListener('click', hideError);
+    window.addEventListener('beforeunload', clearFilePreview);
 
-    async function renderPDF(data) {
-        const pdf = await pdfjsLib.getDocument({ data }).promise;
-        const container = document.getElementById('pdf-container');
-        const pagesContainer = document.getElementById('pdf-pages');
-
-        pagesContainer.innerHTML = '';
-
-        const containerWidth = container.clientWidth - 48;
-
-        for (let i = 1; i <= pdf.numPages; i++) {
-            const page = await pdf.getPage(i);
-            const viewport = page.getViewport({ scale: 1 });
-            const scale = containerWidth / viewport.width;
-            const scaledViewport = page.getViewport({ scale });
-
-            const canvas = document.createElement('canvas');
-            canvas.width = scaledViewport.width;
-            canvas.height = scaledViewport.height;
-            canvas.className = 'shadow-lg';
-
-            pagesContainer.appendChild(canvas);
-
-            const ctx = canvas.getContext('2d');
-            await page.render({ canvasContext: ctx, viewport: scaledViewport }).promise;
-        }
-
-        document.getElementById('pdf-placeholder').classList.add('hidden');
-        pagesContainer.classList.remove('hidden');
+    function updateZoomLabel() {
+        document.getElementById('pdf-zoom-label').textContent = `${Math.round(pdfZoom * 100)}%`;
     }
 
+    function clampPDFZoom(value) {
+        return Math.min(MAX_PDF_ZOOM, Math.max(MIN_PDF_ZOOM, value));
+    }
+
+    function formatRenderDuration(ms) {
+        if (!Number.isFinite(ms)) {
+            return '--';
+        }
+        if (ms < 1000) {
+            return `${Math.round(ms)} ms`;
+        }
+        return `${(ms / 1000).toFixed(2)} s`;
+    }
+
+    function updatePDFRenderStat(ms = null) {
+        const stat = document.getElementById('pdf-render-stat');
+        if (!Number.isFinite(ms)) {
+            stat.classList.add('hidden');
+            stat.textContent = 'Render: --';
+            return;
+        }
+
+        lastPDFRenderMs = ms;
+        stat.textContent = `Render: ${formatRenderDuration(ms)}`;
+        stat.classList.remove('hidden');
+    }
+
+    async function setPDFZoom(nextZoom) {
+        if (!pdfDocument) {
+            return;
+        }
+
+        const clampedZoom = clampPDFZoom(nextZoom);
+        if (Math.abs(clampedZoom - pdfZoom) < 0.001) {
+            return;
+        }
+
+        pdfZoom = clampedZoom;
+        updateZoomLabel();
+        await renderPDFPages();
+    }
+
+    function normalizeWhitespace(value) {
+        return value.replace(/\s+/g, ' ').trim();
+    }
+
+    function normalizePDFText(value) {
+        return normalizeWhitespace(value.toLowerCase().replace(/[^a-z0-9\s]/g, ' '));
+    }
+
+    function normalizeTeXLine(value) {
+        const withoutComments = value.split('%')[0];
+        const withoutCommands = withoutComments
+            .replace(/\\[a-zA-Z@]+\*?\s*(\[[^\]]*\])?/g, ' ')
+            .replace(/[{}$&#_^~\\]/g, ' ');
+        return normalizePDFText(withoutCommands);
+    }
+
+    function lineSearchNeedle(value) {
+        const normalized = normalizeTeXLine(value);
+        if (normalized.length < 6) {
+            return '';
+        }
+
+        const words = normalized.split(' ').filter(word => word.length > 2);
+        if (words.length < 2) {
+            return '';
+        }
+
+        return words.slice(0, 8).join(' ');
+    }
+
+    function clampUnitInterval(value) {
+        if (!Number.isFinite(value)) {
+            return 0.5;
+        }
+        return Math.min(1, Math.max(0, value));
+    }
+
+    function pickLineFromCandidates(candidates, positionRatio = 0.5) {
+        if (!candidates || !candidates.length) {
+            return null;
+        }
+        const ratio = clampUnitInterval(positionRatio);
+        const index = Math.round(ratio * (candidates.length - 1));
+        return candidates[index];
+    }
+
+    function buildLinePageMaps() {
+        lineToPageMap = new Map();
+        pageToLinesMap = new Map();
+
+        const source = fileContents['main.tex'] || '';
+        const lines = source.split(/\r?\n/);
+        const pageNumbers = Array.from(pageTextMap.keys()).sort((a, b) => a - b);
+        if (!lines.length || !pageNumbers.length) {
+            return;
+        }
+
+        let preferredPageIndex = 0;
+
+        lines.forEach((line, index) => {
+            const needle = lineSearchNeedle(line);
+            if (!needle) {
+                return;
+            }
+
+            let matchedPage = null;
+            for (let offset = 0; offset < pageNumbers.length; offset++) {
+                const pageIndex = (preferredPageIndex + offset) % pageNumbers.length;
+                const pageNumber = pageNumbers[pageIndex];
+                const pageText = pageTextMap.get(pageNumber) || '';
+                if (pageText.includes(needle)) {
+                    matchedPage = pageNumber;
+                    preferredPageIndex = pageIndex;
+                    break;
+                }
+            }
+
+            if (!matchedPage) {
+                return;
+            }
+
+            const lineNumber = index + 1;
+            lineToPageMap.set(lineNumber, matchedPage);
+            const pageLines = pageToLinesMap.get(matchedPage) || [];
+            pageLines.push(lineNumber);
+            pageToLinesMap.set(matchedPage, pageLines);
+        });
+    }
+
+    function closestMappedPage(lineNumber) {
+        if (lineToPageMap.has(lineNumber)) {
+            return lineToPageMap.get(lineNumber);
+        }
+
+        let closestLine = null;
+        let closestDistance = Infinity;
+
+        lineToPageMap.forEach((_, mappedLine) => {
+            const distance = Math.abs(mappedLine - lineNumber);
+            if (distance < closestDistance) {
+                closestDistance = distance;
+                closestLine = mappedLine;
+            }
+        });
+
+        if (closestLine === null || closestDistance > 30) {
+            return null;
+        }
+
+        return lineToPageMap.get(closestLine);
+    }
+
+    function closestMappedLine(pageNumber, positionRatio = 0.5) {
+        const exactPageLine = pickLineFromCandidates(pageToLinesMap.get(pageNumber), positionRatio);
+        if (exactPageLine !== null) {
+            return exactPageLine;
+        }
+
+        let closestPage = null;
+        let closestDistance = Infinity;
+
+        pageToLinesMap.forEach((_, mappedPage) => {
+            const distance = Math.abs(mappedPage - pageNumber);
+            if (distance < closestDistance) {
+                closestDistance = distance;
+                closestPage = mappedPage;
+            }
+        });
+
+        if (closestPage === null || closestDistance > 2) {
+            return null;
+        }
+
+        return pickLineFromCandidates(pageToLinesMap.get(closestPage), positionRatio);
+    }
+
+    function setActivePDFPage(pageNumber, scrollIntoView = true) {
+        const current = document.querySelector('#pdf-pages .pdf-page-active');
+        if (current) {
+            current.classList.remove('pdf-page-active');
+        }
+
+        const pageEl = document.querySelector(`#pdf-pages .pdf-page[data-page="${pageNumber}"]`);
+        if (!pageEl) {
+            return;
+        }
+
+        pageEl.classList.add('pdf-page-active');
+        activePDFPage = pageNumber;
+
+        if (scrollIntoView) {
+            pageEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+    }
+
+    function highlightEditorLine(lineNumber) {
+        lineHighlightDecorations = editor.deltaDecorations(lineHighlightDecorations, [
+            {
+                range: new monaco.Range(lineNumber, 1, lineNumber, 1),
+                options: {
+                    isWholeLine: true,
+                    className: 'source-line-highlight',
+                },
+            },
+        ]);
+
+        if (lineHighlightTimer) {
+            clearTimeout(lineHighlightTimer);
+        }
+        lineHighlightTimer = setTimeout(() => {
+            lineHighlightDecorations = editor.deltaDecorations(lineHighlightDecorations, []);
+        }, 1200);
+    }
+
+    function showLineInPDF(lineNumber, withMessage = false) {
+        if (!pdfDocument) {
+            if (withMessage) {
+                setStatus('Compile to generate PDF preview first', true);
+            }
+            return;
+        }
+
+        const pageNumber = closestMappedPage(lineNumber);
+        if (!pageNumber) {
+            if (withMessage) {
+                setStatus('No PDF sync point found for this line', true);
+            }
+            return;
+        }
+
+        setActivePDFPage(pageNumber, true);
+        if (withMessage) {
+            setStatus(`main.tex:${lineNumber} -> PDF page ${pageNumber}`);
+        }
+    }
+
+    function showCurrentLineInPDF() {
+        if (!editor) {
+            return;
+        }
+
+        if (currentFile !== 'main.tex') {
+            setStatus('Open main.tex to sync cursor with PDF', true);
+            return;
+        }
+
+        const position = editor.getPosition();
+        if (!position) {
+            return;
+        }
+        showLineInPDF(position.lineNumber, true);
+    }
+
+    async function jumpToTeXFromPage(pageNumber, event = null) {
+        let positionRatio = 0.5;
+        if (event && event.currentTarget) {
+            const rect = event.currentTarget.getBoundingClientRect();
+            if (rect.height > 0) {
+                positionRatio = (event.clientY - rect.top) / rect.height;
+            }
+        }
+
+        const lineNumber = closestMappedLine(pageNumber, positionRatio);
+        if (!lineNumber) {
+            setStatus('No TeX sync point found for this PDF page', true);
+            return;
+        }
+
+        await openFile('main.tex');
+
+        const maxLine = editor.getModel().getLineCount();
+        const safeLine = Math.min(Math.max(lineNumber, 1), maxLine);
+
+        suppressEditorPDFSync = true;
+        editor.revealLineInCenter(safeLine);
+        editor.setPosition({ lineNumber: safeLine, column: 1 });
+        editor.focus();
+        highlightEditorLine(safeLine);
+        setTimeout(() => {
+            suppressEditorPDFSync = false;
+        }, 0);
+
+        setActivePDFPage(pageNumber, false);
+        setStatus(`PDF page ${pageNumber} -> main.tex:${safeLine}`);
+    }
+
+    async function renderPDF(data) {
+        if (pdfDocument) {
+            await pdfDocument.destroy();
+            pdfDocument = null;
+        }
+
+        pdfDocument = await pdfjsLib.getDocument({ data }).promise;
+        document.getElementById('pdf-toolbar').classList.remove('hidden');
+        updateZoomLabel();
+        updatePDFRenderStat(null);
+        await renderPDFPages();
+    }
+
+    async function renderPDFPages() {
+        if (!pdfDocument) {
+            return;
+        }
+
+        const renderStart = performance.now();
+        const renderToken = ++pdfRenderToken;
+        const container = document.getElementById('pdf-container');
+        const pagesContainer = document.getElementById('pdf-pages');
+        const placeholder = document.getElementById('pdf-placeholder');
+
+        pagesContainer.innerHTML = '';
+        pageTextMap = new Map();
+        lineToPageMap = new Map();
+        pageToLinesMap = new Map();
+
+        const containerWidth = Math.max(300, container.clientWidth - 56);
+        const devicePixelRatio = window.devicePixelRatio || 1;
+
+        for (let i = 1; i <= pdfDocument.numPages; i++) {
+            if (renderToken !== pdfRenderToken) {
+                return;
+            }
+
+            const page = await pdfDocument.getPage(i);
+            const baseViewport = page.getViewport({ scale: 1 });
+            const scale = (containerWidth / baseViewport.width) * pdfZoom;
+            const scaledViewport = page.getViewport({ scale });
+
+            const pageWrapper = document.createElement('div');
+            pageWrapper.className = 'pdf-page rounded-md overflow-hidden';
+            pageWrapper.dataset.page = String(i);
+            pageWrapper.addEventListener('click', (event) => jumpToTeXFromPage(i, event));
+
+            const canvas = document.createElement('canvas');
+            canvas.width = Math.ceil(scaledViewport.width * devicePixelRatio);
+            canvas.height = Math.ceil(scaledViewport.height * devicePixelRatio);
+            canvas.style.width = `${scaledViewport.width}px`;
+            canvas.style.height = `${scaledViewport.height}px`;
+            canvas.className = 'block';
+
+            pageWrapper.appendChild(canvas);
+            pagesContainer.appendChild(pageWrapper);
+
+            const ctx = canvas.getContext('2d');
+            await page.render({
+                canvasContext: ctx,
+                viewport: scaledViewport,
+                transform: [devicePixelRatio, 0, 0, devicePixelRatio, 0, 0],
+            }).promise;
+
+            const textContent = await page.getTextContent();
+            const pageText = textContent.items.map(item => item.str).join(' ');
+            pageTextMap.set(i, normalizePDFText(pageText));
+        }
+
+        if (renderToken !== pdfRenderToken) {
+            return;
+        }
+
+        buildLinePageMaps();
+
+        if (activePDFPage !== null) {
+            setActivePDFPage(activePDFPage, false);
+        }
+
+        placeholder.classList.add('hidden');
+        pagesContainer.classList.remove('hidden');
+        updatePDFRenderStat(performance.now() - renderStart);
+    }
+
+    window.addEventListener('resize', () => {
+        if (!pdfDocument) {
+            return;
+        }
+
+        if (pdfResizeTimer) {
+            clearTimeout(pdfResizeTimer);
+        }
+        pdfResizeTimer = setTimeout(() => {
+            renderPDFPages();
+        }, 120);
+    });
+
+    document.getElementById('pdf-zoom-out').addEventListener('click', () => setPDFZoom(pdfZoom - 0.1));
+    document.getElementById('pdf-zoom-in').addEventListener('click', () => setPDFZoom(pdfZoom + 0.1));
+    document.getElementById('pdf-zoom-reset').addEventListener('click', () => setPDFZoom(1));
+    document.getElementById('pdf-fit-width').addEventListener('click', () => setPDFZoom(1));
+    document.getElementById('show-in-pdf-btn').addEventListener('click', showCurrentLineInPDF);
     document.getElementById('save-btn').addEventListener('click', save);
     document.getElementById('compile-btn').addEventListener('click', compile);
+    updateZoomLabel();
+    updatePDFRenderStat();
 </script>
 </body>
 </html>

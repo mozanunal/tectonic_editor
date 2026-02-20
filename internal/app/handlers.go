@@ -3,9 +3,12 @@ package app
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"io"
+	"mime"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -322,22 +325,91 @@ func (s *Server) handleGetPDF(w http.ResponseWriter, r *http.Request) {
 }
 
 type FileInfo struct {
-	Name    string `json:"name"`
-	Path    string `json:"path"`
-	IsDir   bool   `json:"isDir"`
-	Size    int64  `json:"size"`
-	IsText  bool   `json:"isText"`
+	Name        string `json:"name"`
+	Path        string `json:"path"`
+	IsDir       bool   `json:"isDir"`
+	Size        int64  `json:"size"`
+	IsText      bool   `json:"isText"`
+	ContentType string `json:"contentType"`
+}
+
+var compilerArtifacts = map[string]struct{}{
+	"main.pdf": {},
+	"main.log": {},
+	"main.aux": {},
 }
 
 func isTextFile(name string) bool {
-	textExts := []string{".tex", ".bib", ".sty", ".cls", ".txt", ".md", ".bst", ".cfg", ".def"}
 	ext := strings.ToLower(filepath.Ext(name))
-	for _, e := range textExts {
-		if ext == e {
+	if ext == "" {
+		return false
+	}
+
+	if detected := mime.TypeByExtension(ext); detected != "" {
+		mediaType, _, err := mime.ParseMediaType(detected)
+		if err == nil {
+			if strings.HasPrefix(mediaType, "text/") {
+				return true
+			}
+			switch mediaType {
+			case "application/json", "application/javascript", "application/xml", "application/x-tex":
+				return true
+			}
+		}
+	}
+
+	textExts := []string{
+		".tex", ".ltx", ".bib", ".sty", ".cls", ".txt", ".md", ".bst", ".cfg", ".def",
+		".json", ".yaml", ".yml", ".xml", ".csv", ".tsv", ".html", ".htm", ".css", ".js", ".ts",
+		".go", ".py", ".sh", ".toml", ".ini",
+	}
+	for _, candidate := range textExts {
+		if ext == candidate {
 			return true
 		}
 	}
+
 	return false
+}
+
+func contentTypeForName(name string) string {
+	ext := strings.ToLower(filepath.Ext(name))
+	if ext == "" {
+		if isTextFile(name) {
+			return "text/plain; charset=utf-8"
+		}
+		return "application/octet-stream"
+	}
+
+	if detected := mime.TypeByExtension(ext); detected != "" {
+		if strings.HasPrefix(strings.ToLower(detected), "text/") && !strings.Contains(strings.ToLower(detected), "charset=") {
+			return detected + "; charset=utf-8"
+		}
+		return detected
+	}
+
+	if isTextFile(name) {
+		return "text/plain; charset=utf-8"
+	}
+
+	return "application/octet-stream"
+}
+
+func detectContentType(name string, content []byte) string {
+	byName := contentTypeForName(name)
+	if byName != "application/octet-stream" {
+		return byName
+	}
+
+	if len(content) == 0 {
+		return byName
+	}
+
+	detected := http.DetectContentType(content)
+	if strings.HasPrefix(strings.ToLower(detected), "text/") && !strings.Contains(strings.ToLower(detected), "charset=") {
+		return detected + "; charset=utf-8"
+	}
+	return detected
 }
 
 func (s *Server) verifyProjectAccess(r *http.Request) (string, bool) {
@@ -353,6 +425,94 @@ func (s *Server) verifyProjectAccess(r *http.Request) (string, bool) {
 	return projectID, exists
 }
 
+func normalizeProjectPath(input string, allowEmpty bool) (string, error) {
+	value := strings.TrimSpace(strings.ReplaceAll(input, "\\", "/"))
+	if value == "" {
+		if allowEmpty {
+			return "", nil
+		}
+		return "", errors.New("path required")
+	}
+	if strings.HasPrefix(value, "/") {
+		return "", errors.New("absolute paths are not allowed")
+	}
+
+	parts := strings.Split(value, "/")
+	normalizedParts := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if part == "" || part == "." {
+			continue
+		}
+		if part == ".." {
+			return "", errors.New("invalid path")
+		}
+		normalizedParts = append(normalizedParts, part)
+	}
+
+	normalized := path.Clean(strings.Join(normalizedParts, "/"))
+	if normalized == "." {
+		normalized = ""
+	}
+	if normalized == "" && !allowEmpty {
+		return "", errors.New("path required")
+	}
+	return normalized, nil
+}
+
+func isPathWithinProject(projectDir, candidatePath string) bool {
+	rel, err := filepath.Rel(projectDir, candidatePath)
+	if err != nil {
+		return false
+	}
+	if rel == "." {
+		return true
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		return false
+	}
+	return true
+}
+
+func resolveProjectPath(projectDir, input string, allowEmpty bool) (string, string, error) {
+	rel, err := normalizeProjectPath(input, allowEmpty)
+	if err != nil {
+		return "", "", err
+	}
+
+	abs := projectDir
+	if rel != "" {
+		abs = filepath.Join(projectDir, filepath.FromSlash(rel))
+	}
+	if !isPathWithinProject(projectDir, abs) {
+		return "", "", errors.New("invalid path")
+	}
+	return rel, abs, nil
+}
+
+func hasHiddenSegment(rel string) bool {
+	for _, segment := range strings.Split(rel, "/") {
+		if segment != "" && strings.HasPrefix(segment, ".") {
+			return true
+		}
+	}
+	return false
+}
+
+func shouldSkipFileListEntry(rel string, isDir bool) bool {
+	if hasHiddenSegment(rel) {
+		return true
+	}
+	if isDir {
+		return false
+	}
+	_, isArtifact := compilerArtifacts[rel]
+	return isArtifact
+}
+
+func (s *Server) touchProject(projectID string) {
+	s.db.Exec("UPDATE projects SET updated = datetime('now') WHERE id = ?", projectID)
+}
+
 func (s *Server) handleListFiles(w http.ResponseWriter, r *http.Request) {
 	projectID, ok := s.verifyProjectAccess(r)
 	if !ok {
@@ -361,36 +521,60 @@ func (s *Server) handleListFiles(w http.ResponseWriter, r *http.Request) {
 	}
 
 	projectDir := filepath.Join(s.projectsDir, projectID)
-	entries, err := os.ReadDir(projectDir)
+	var files []FileInfo
+	err := filepath.WalkDir(projectDir, func(currentPath string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if currentPath == projectDir {
+			return nil
+		}
+
+		relPath, err := filepath.Rel(projectDir, currentPath)
+		if err != nil {
+			return err
+		}
+		relPath = filepath.ToSlash(relPath)
+		if shouldSkipFileListEntry(relPath, entry.IsDir()) {
+			if entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+
+		contentType := ""
+		isText := false
+		if !entry.IsDir() {
+			contentType = contentTypeForName(relPath)
+			isText = isTextFile(relPath)
+		}
+
+		files = append(files, FileInfo{
+			Name:        relPath,
+			Path:        relPath,
+			IsDir:       entry.IsDir(),
+			Size:        info.Size(),
+			IsText:      isText,
+			ContentType: contentType,
+		})
+
+		return nil
+	})
 	if err != nil {
 		http.Error(w, "Failed to list files", http.StatusInternalServerError)
 		return
-	}
-
-	var files []FileInfo
-	for _, entry := range entries {
-		info, _ := entry.Info()
-		name := entry.Name()
-		if strings.HasPrefix(name, ".") {
-			continue
-		}
-		if strings.HasSuffix(name, ".pdf") || strings.HasSuffix(name, ".log") || strings.HasSuffix(name, ".aux") {
-			continue
-		}
-		files = append(files, FileInfo{
-			Name:   name,
-			Path:   name,
-			IsDir:  entry.IsDir(),
-			Size:   info.Size(),
-			IsText: isTextFile(name),
-		})
 	}
 
 	sort.Slice(files, func(i, j int) bool {
 		if files[i].IsDir != files[j].IsDir {
 			return files[i].IsDir
 		}
-		return files[i].Name < files[j].Name
+		return files[i].Path < files[j].Path
 	})
 
 	w.Header().Set("Content-Type", "application/json")
@@ -404,30 +588,36 @@ func (s *Server) handleCreateFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	filename := r.FormValue("filename")
-	if filename == "" {
-		http.Error(w, "Filename required", http.StatusBadRequest)
-		return
-	}
-
-	filename = filepath.Clean(filename)
-	if strings.Contains(filename, "..") {
+	projectDir := filepath.Join(s.projectsDir, projectID)
+	_, filePath, err := resolveProjectPath(projectDir, r.FormValue("filename"), false)
+	if err != nil {
 		http.Error(w, "Invalid filename", http.StatusBadRequest)
 		return
 	}
-
-	filePath := filepath.Join(s.projectsDir, projectID, filename)
 
 	if _, err := os.Stat(filePath); err == nil {
 		http.Error(w, "File already exists", http.StatusConflict)
 		return
 	}
 
-	if err := os.WriteFile(filePath, []byte(""), 0644); err != nil {
-		http.Error(w, "Failed to create file", http.StatusInternalServerError)
-		return
+	entryType := strings.ToLower(strings.TrimSpace(r.FormValue("type")))
+	if entryType == "dir" {
+		if err := os.MkdirAll(filePath, 0755); err != nil {
+			http.Error(w, "Failed to create folder", http.StatusInternalServerError)
+			return
+		}
+	} else {
+		if err := os.MkdirAll(filepath.Dir(filePath), 0755); err != nil {
+			http.Error(w, "Failed to create file", http.StatusInternalServerError)
+			return
+		}
+		if err := os.WriteFile(filePath, []byte(""), 0644); err != nil {
+			http.Error(w, "Failed to create file", http.StatusInternalServerError)
+			return
+		}
 	}
 
+	s.touchProject(projectID)
 	w.WriteHeader(http.StatusCreated)
 }
 
@@ -447,13 +637,17 @@ func (s *Server) handleUploadFile(w http.ResponseWriter, r *http.Request) {
 	}
 	defer file.Close()
 
-	filename := filepath.Clean(header.Filename)
-	if strings.Contains(filename, "..") {
+	projectDir := filepath.Join(s.projectsDir, projectID)
+	_, filePath, err := resolveProjectPath(projectDir, header.Filename, false)
+	if err != nil {
 		http.Error(w, "Invalid filename", http.StatusBadRequest)
 		return
 	}
 
-	filePath := filepath.Join(s.projectsDir, projectID, filename)
+	if err := os.MkdirAll(filepath.Dir(filePath), 0755); err != nil {
+		http.Error(w, "Failed to create file path", http.StatusInternalServerError)
+		return
+	}
 
 	dst, err := os.Create(filePath)
 	if err != nil {
@@ -467,6 +661,7 @@ func (s *Server) handleUploadFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	s.touchProject(projectID)
 	w.WriteHeader(http.StatusCreated)
 }
 
@@ -477,26 +672,29 @@ func (s *Server) handleGetFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	filename := chi.URLParam(r, "*")
-	filename = filepath.Clean(filename)
-	if strings.Contains(filename, "..") {
+	projectDir := filepath.Join(s.projectsDir, projectID)
+	filename, filePath, err := resolveProjectPath(projectDir, chi.URLParam(r, "*"), false)
+	if err != nil {
 		http.Error(w, "Invalid filename", http.StatusBadRequest)
 		return
 	}
 
-	filePath := filepath.Join(s.projectsDir, projectID, filename)
-
+	fileInfo, err := os.Stat(filePath)
+	if err != nil {
+		http.Error(w, "File not found", http.StatusNotFound)
+		return
+	}
+	if fileInfo.IsDir() {
+		http.Error(w, "Cannot read directory", http.StatusBadRequest)
+		return
+	}
 	content, err := os.ReadFile(filePath)
 	if err != nil {
 		http.Error(w, "File not found", http.StatusNotFound)
 		return
 	}
 
-	if isTextFile(filename) {
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	} else {
-		w.Header().Set("Content-Type", "application/octet-stream")
-	}
+	w.Header().Set("Content-Type", detectContentType(filename, content))
 	w.Write(content)
 }
 
@@ -507,17 +705,24 @@ func (s *Server) handleUpdateFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	filename := chi.URLParam(r, "*")
-	filename = filepath.Clean(filename)
-	if strings.Contains(filename, "..") {
+	projectDir := filepath.Join(s.projectsDir, projectID)
+	_, filePath, err := resolveProjectPath(projectDir, chi.URLParam(r, "*"), false)
+	if err != nil {
 		http.Error(w, "Invalid filename", http.StatusBadRequest)
 		return
 	}
 
-	filePath := filepath.Join(s.projectsDir, projectID, filename)
-
-	if _, err := os.Stat(filePath); os.IsNotExist(err) {
+	fileInfo, err := os.Stat(filePath)
+	if os.IsNotExist(err) {
 		http.Error(w, "File not found", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		http.Error(w, "Failed to access file", http.StatusInternalServerError)
+		return
+	}
+	if fileInfo.IsDir() {
+		http.Error(w, "Cannot edit directory", http.StatusBadRequest)
 		return
 	}
 
@@ -527,7 +732,7 @@ func (s *Server) handleUpdateFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.db.Exec("UPDATE projects SET updated = datetime('now') WHERE id = ?", projectID)
+	s.touchProject(projectID)
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -538,9 +743,9 @@ func (s *Server) handleDeleteFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	filename := chi.URLParam(r, "*")
-	filename = filepath.Clean(filename)
-	if strings.Contains(filename, "..") {
+	projectDir := filepath.Join(s.projectsDir, projectID)
+	filename, filePath, err := resolveProjectPath(projectDir, chi.URLParam(r, "*"), false)
+	if err != nil {
 		http.Error(w, "Invalid filename", http.StatusBadRequest)
 		return
 	}
@@ -550,12 +755,112 @@ func (s *Server) handleDeleteFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	filePath := filepath.Join(s.projectsDir, projectID, filename)
+	fileInfo, err := os.Stat(filePath)
+	if os.IsNotExist(err) {
+		http.Error(w, "File not found", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		http.Error(w, "Failed to access file", http.StatusInternalServerError)
+		return
+	}
 
-	if err := os.Remove(filePath); err != nil {
+	if fileInfo.IsDir() {
+		err = os.RemoveAll(filePath)
+	} else {
+		err = os.Remove(filePath)
+	}
+	if err != nil {
 		http.Error(w, "Failed to delete file", http.StatusInternalServerError)
 		return
 	}
 
+	s.touchProject(projectID)
 	w.WriteHeader(http.StatusOK)
+}
+
+func (s *Server) handleMoveFile(w http.ResponseWriter, r *http.Request) {
+	projectID, ok := s.verifyProjectAccess(r)
+	if !ok {
+		http.Error(w, "Project not found", http.StatusNotFound)
+		return
+	}
+
+	projectDir := filepath.Join(s.projectsDir, projectID)
+
+	sourceRel, sourcePath, err := resolveProjectPath(projectDir, r.FormValue("source"), false)
+	if err != nil {
+		http.Error(w, "Invalid source path", http.StatusBadRequest)
+		return
+	}
+	if sourceRel == "main.tex" {
+		http.Error(w, "Cannot move main.tex", http.StatusBadRequest)
+		return
+	}
+
+	sourceInfo, err := os.Stat(sourcePath)
+	if os.IsNotExist(err) {
+		http.Error(w, "Source not found", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		http.Error(w, "Failed to access source path", http.StatusInternalServerError)
+		return
+	}
+
+	targetDirRel, targetDirPath, err := resolveProjectPath(projectDir, r.FormValue("targetDir"), true)
+	if err != nil {
+		http.Error(w, "Invalid target path", http.StatusBadRequest)
+		return
+	}
+	if targetDirRel != "" {
+		targetInfo, err := os.Stat(targetDirPath)
+		if os.IsNotExist(err) {
+			http.Error(w, "Target directory not found", http.StatusBadRequest)
+			return
+		}
+		if err != nil {
+			http.Error(w, "Failed to access target path", http.StatusInternalServerError)
+			return
+		}
+		if !targetInfo.IsDir() {
+			http.Error(w, "Target must be a directory", http.StatusBadRequest)
+			return
+		}
+	}
+
+	if sourceInfo.IsDir() && (targetDirRel == sourceRel || strings.HasPrefix(targetDirRel+"/", sourceRel+"/")) {
+		http.Error(w, "Cannot move a directory into itself", http.StatusBadRequest)
+		return
+	}
+
+	targetRel := path.Join(targetDirRel, path.Base(sourceRel))
+	if targetRel == sourceRel {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"path": targetRel})
+		return
+	}
+
+	targetPath := filepath.Join(projectDir, filepath.FromSlash(targetRel))
+	if !isPathWithinProject(projectDir, targetPath) {
+		http.Error(w, "Invalid target path", http.StatusBadRequest)
+		return
+	}
+
+	if _, err := os.Stat(targetPath); err == nil {
+		http.Error(w, "Target already exists", http.StatusConflict)
+		return
+	} else if !os.IsNotExist(err) {
+		http.Error(w, "Failed to access target path", http.StatusInternalServerError)
+		return
+	}
+
+	if err := os.Rename(sourcePath, targetPath); err != nil {
+		http.Error(w, "Failed to move file", http.StatusInternalServerError)
+		return
+	}
+
+	s.touchProject(projectID)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"path": targetRel})
 }
