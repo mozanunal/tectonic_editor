@@ -40,17 +40,13 @@
     <nav class="bg-white shadow h-16 flex-shrink-0 z-10">
         <div class="h-full px-4 flex justify-between items-center">
             <div class="flex items-center gap-4">
-                <a href="/" class="font-semibold text-gray-800 hover:text-gray-700">Tectonic Editor</a>
-                <a href="/" class="text-gray-600 hover:text-gray-800">Home</a>
-                {{if .User.IsAdmin}}
-                <a href="/admin/users" class="text-gray-600 hover:text-gray-800">Admin</a>
-                {{end}}
-                <span class="text-gray-300">|</span>
+                <a href="/" class="inline-flex items-center gap-2 text-gray-600 hover:text-gray-800" aria-label="Back to projects">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                        <path fill-rule="evenodd" d="M17 10a.75.75 0 0 1-.75.75H5.56l3.22 3.22a.75.75 0 1 1-1.06 1.06l-4.5-4.5a.75.75 0 0 1 0-1.06l4.5-4.5a.75.75 0 0 1 1.06 1.06l-3.22 3.22h10.69A.75.75 0 0 1 17 10Z" clip-rule="evenodd" />
+                    </svg>
+                    <span>Projects</span>
+                </a>
                 <span class="font-semibold text-gray-800">{{.Project.Name}}</span>
-                <span class="rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-700">{{.Project.AccessRole}}</span>
-                {{if ne .Project.AccessRole "owner"}}
-                <span class="text-xs text-gray-500">Owner: {{.Project.OwnerEmail}}</span>
-                {{end}}
                 <span id="current-file" class="text-sm text-gray-500">main.tex</span>
             </div>
             <div class="flex items-center gap-2">
