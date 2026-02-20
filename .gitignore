@@ -1,0 +1,22 @@
+# Binaries
+bin/
+*.exe
+
+# Data
+data/latex.db
+data/projects/
+
+# Dependencies
+node_modules/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+
+# Build artifacts
+*.log
+/server

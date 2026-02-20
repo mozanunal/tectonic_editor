@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Projects - Tectonic Editor</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+</head>
+<body class="bg-gray-100 min-h-screen">
+<div class="min-h-screen">
+    <nav class="bg-white shadow">
+        <div class="max-w-7xl mx-auto px-4 py-4 flex justify-between items-center">
+            <h1 class="text-xl font-bold text-gray-800">Tectonic Editor</h1>
+            <div class="flex items-center gap-4">
+                <span class="text-gray-600">{{.User.Email}}</span>
+                <form method="POST" action="/logout">
+                    <button type="submit" class="text-red-600 hover:underline">Logout</button>
+                </form>
+            </div>
+        </div>
+    </nav>
+
+    <main class="max-w-7xl mx-auto px-4 py-8">
+        <div class="flex justify-between items-center mb-6">
+            <h2 class="text-2xl font-bold text-gray-800">Your Projects</h2>
+            <form method="POST" action="/projects" class="flex gap-2">
+                <input type="text" name="name" placeholder="Project name"
+                    class="px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                <button type="submit"
+                    class="bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700 transition">
+                    New Project
+                </button>
+            </form>
+        </div>
+
+        {{if .Projects}}
+        <div class="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+            {{range .Projects}}
+            <div class="bg-white rounded-lg shadow p-4 flex flex-col">
+                <div class="flex justify-between items-start mb-2">
+                    <h3 class="font-semibold text-gray-800">{{.Name}}</h3>
+                    <button
+                        hx-delete="/projects/{{.ID}}"
+                        hx-confirm="Delete this project?"
+                        hx-target="closest div.bg-white"
+                        hx-swap="outerHTML"
+                        class="text-red-500 hover:text-red-700 text-sm">
+                        Delete
+                    </button>
+                </div>
+                <p class="text-sm text-gray-500 mb-4">Updated: {{.Updated}}</p>
+                <a href="/editor/{{.ID}}"
+                    class="mt-auto bg-gray-100 text-gray-700 py-2 px-4 rounded text-center hover:bg-gray-200 transition">
+                    Open Editor
+                </a>
+            </div>
+            {{end}}
+        </div>
+        {{else}}
+        <div class="bg-white rounded-lg shadow p-8 text-center">
+            <p class="text-gray-600 mb-4">No projects yet. Create your first project to get started.</p>
+        </div>
+        {{end}}
+    </main>
+</div>
+</body>
+</html>
