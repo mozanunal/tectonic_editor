@@ -10,12 +10,10 @@
 <div class="min-h-screen">
     <nav class="bg-white shadow">
         <div class="max-w-7xl mx-auto px-4 py-4 flex justify-between items-center">
-            <div class="flex items-center gap-4">
-                <h1 class="text-xl font-bold text-gray-800">Tectonic Editor</h1>
-                <a href="/" class="text-gray-600 hover:text-gray-800">Projects</a>
-                <span class="rounded bg-blue-100 px-2 py-1 text-xs text-blue-700">Admin</span>
-            </div>
-            <div class="flex items-center gap-4">
+            <a href="/" class="text-xl font-bold text-gray-800 hover:text-gray-700">Tectonic Editor</a>
+            <div class="flex items-center gap-4 text-sm">
+                <a href="/" class="text-gray-600 hover:text-gray-800">Home</a>
+                <a href="/admin/users" class="rounded bg-blue-100 px-2 py-1 text-xs text-blue-700">Admin</a>
                 <span class="text-gray-600">{{.User.Email}}</span>
                 <form method="POST" action="/logout">
                     <button type="submit" class="text-red-600 hover:underline">Logout</button>
