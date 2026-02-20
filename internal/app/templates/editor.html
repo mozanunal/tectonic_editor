@@ -69,6 +69,13 @@
                     class="bg-gray-100 text-gray-700 py-2 px-4 rounded hover:bg-gray-200 transition">
                     Save
                 </button>
+                <div class="flex items-center gap-2">
+                    <label for="compile-target" class="text-xs text-gray-500">Entry</label>
+                    <select id="compile-target"
+                        class="rounded border border-gray-300 bg-white py-2 pl-2 pr-8 text-sm text-gray-700 focus:border-blue-500 focus:outline-none">
+                        <option value="main.tex">main.tex</option>
+                    </select>
+                </div>
                 <button id="compile-btn"
                     class="bg-blue-600 text-white py-2 px-4 rounded hover:bg-blue-700 transition">
                     Compile
@@ -195,7 +202,7 @@
 <div id="new-file-modal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
     <div class="bg-white rounded-lg p-6 w-80">
         <h3 class="text-lg font-semibold mb-4">New File</h3>
-        <input type="text" id="new-file-name" placeholder="filename.tex"
+        <input type="text" id="new-file-name" placeholder="filename.tex or main.typ"
             class="w-full px-3 py-2 border rounded mb-4 focus:outline-none focus:ring-2 focus:ring-blue-500">
         <div class="flex gap-2 justify-end">
             <button id="cancel-new-file" class="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded">Cancel</button>
@@ -219,8 +226,9 @@
     const MIN_PDF_ZOOM = 0.4;
     const MAX_PDF_ZOOM = 3;
     const MAX_COMMENT_BODY_LENGTH = 2000;
+    const DEFAULT_PRIMARY_FILE = 'main.tex';
     let editor;
-    let currentFile = 'main.tex';
+    let currentFile = DEFAULT_PRIMARY_FILE;
     let currentFileIsText = true;
     let currentPreviewURL = null;
     let fileList = [];
@@ -245,8 +253,9 @@
     let pdfResizeTimer = null;
     let comments = [];
     let commentTarget = { filePath: 'main.tex', startLine: 1, endLine: 1, snippet: '' };
+    let compileTarget = DEFAULT_PRIMARY_FILE;
 
-    fileContents['main.tex'] = initialContent;
+    fileContents[DEFAULT_PRIMARY_FILE] = initialContent;
 
     require.config({ paths: { vs: 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.45.0/min/vs' } });
 
@@ -301,7 +310,7 @@
         });
 
         editor.onDidChangeCursorPosition((e) => {
-            if (suppressEditorPDFSync || !pdfDocument || currentFile !== 'main.tex') {
+            if (suppressEditorPDFSync || !pdfDocument || currentFile !== compileTarget) {
                 return;
             }
             if (e.source !== 'mouse') {
@@ -341,9 +350,23 @@
         return `/api/projects/${projectId}/files/${encoded}`;
     }
 
+    function getFileExtension(filename) {
+        const dotIndex = filename.lastIndexOf('.');
+        if (dotIndex === -1) {
+            return '';
+        }
+        return filename.slice(dotIndex).toLowerCase();
+    }
+
+    function isCompilableFile(filename) {
+        const ext = getFileExtension(filename);
+        return ext === '.tex' || ext === '.typ';
+    }
+
     function getLanguageForFile(filename) {
-        if (filename.endsWith('.tex') || filename.endsWith('.sty') || filename.endsWith('.cls')) return 'latex';
-        if (filename.endsWith('.bib') || filename.endsWith('.bst')) return 'bibtex';
+        const ext = getFileExtension(filename);
+        if (ext === '.tex' || ext === '.ltx' || ext === '.sty' || ext === '.cls') return 'latex';
+        if (ext === '.bib' || ext === '.bst') return 'bibtex';
         return 'plaintext';
     }
 
@@ -585,8 +608,9 @@
             await loadComments();
 
             if (!filesByPath[currentFile] || filesByPath[currentFile].isDir) {
-                if (filesByPath['main.tex']) {
-                    await openFile('main.tex');
+                const fallbackFile = getDefaultOpenFile();
+                if (fallbackFile) {
+                    await openFile(fallbackFile);
                 }
             } else {
                 await openFile(currentFile);
@@ -711,6 +735,68 @@
         renderFileList(fileList);
     }
 
+    function listCompileTargets() {
+        return fileList
+            .filter(file => !file.isDir && isCompilableFile(file.path))
+            .map(file => file.path)
+            .sort((a, b) => a.localeCompare(b));
+    }
+
+    function pickCompileTarget(candidates) {
+        if (compileTarget && candidates.includes(compileTarget)) {
+            return compileTarget;
+        }
+        if (currentFile && candidates.includes(currentFile)) {
+            return currentFile;
+        }
+        if (candidates.includes('main.tex')) {
+            return 'main.tex';
+        }
+        if (candidates.includes('main.typ')) {
+            return 'main.typ';
+        }
+        return candidates[0] || '';
+    }
+
+    function getDefaultOpenFile() {
+        if (compileTarget && filesByPath[compileTarget] && !filesByPath[compileTarget].isDir) {
+            return compileTarget;
+        }
+        const firstTextFile = fileList.find(file => !file.isDir && file.isText);
+        if (firstTextFile) {
+            return firstTextFile.path;
+        }
+        const firstFile = fileList.find(file => !file.isDir);
+        return firstFile ? firstFile.path : '';
+    }
+
+    function updateCompileTargetSelect() {
+        const select = document.getElementById('compile-target');
+        const candidates = listCompileTargets();
+        select.innerHTML = '';
+
+        if (!candidates.length) {
+            compileTarget = '';
+            select.disabled = true;
+            const option = document.createElement('option');
+            option.value = '';
+            option.textContent = 'No .tex/.typ files';
+            select.appendChild(option);
+            return;
+        }
+
+        compileTarget = pickCompileTarget(candidates);
+        candidates.forEach((candidate) => {
+            const option = document.createElement('option');
+            option.value = candidate;
+            option.textContent = candidate;
+            select.appendChild(option);
+        });
+
+        select.disabled = !canWrite;
+        select.value = compileTarget;
+    }
+
     async function loadFileList() {
         try {
             const response = await fetch(`/api/projects/${projectId}/files`);
@@ -725,8 +811,32 @@
                 filesByPath[file.path] = file;
             });
 
-            ensureFolderExpanded(getParentPath(currentFile));
+            updateCompileTargetSelect();
+
+            const currentFileEntry = filesByPath[currentFile];
+            if (currentFileEntry && !currentFileEntry.isDir) {
+                ensureFolderExpanded(getParentPath(currentFile));
+                renderFileList(fileList);
+                return;
+            }
+
+            const fallbackFile = getDefaultOpenFile();
+            if (!fallbackFile) {
+                currentFile = '';
+                currentFileIsText = true;
+                document.getElementById('current-file').textContent = '(no file)';
+                renderFileList(fileList);
+                suppressEditorChangeTracking = true;
+                editor.setValue('');
+                suppressEditorChangeTracking = false;
+                showEditor();
+                setSaveEnabled(false);
+                return;
+            }
+
+            ensureFolderExpanded(getParentPath(fallbackFile));
             renderFileList(fileList);
+            await openFile(fallbackFile);
         } catch (_) {
             setStatus('Failed to load files', true);
         }
@@ -759,13 +869,10 @@
         showEditor();
         setSaveEnabled(canWrite);
 
-        if (!Object.prototype.hasOwnProperty.call(fileContents, filename)) {
-            const response = await fetch(buildFileURL(filename));
-            if (!response.ok) {
-                setStatus('Failed to load file', true);
-                return;
-            }
-            fileContents[filename] = await response.text();
+        const loaded = await ensureTextFileCached(filename);
+        if (!loaded) {
+            setStatus('Failed to load file', true);
+            return;
         }
 
         const model = editor.getModel();
@@ -778,6 +885,23 @@
         updateCommentTargetFromEditor(true);
         renderCommentDecorations();
         renderCommentList();
+    }
+
+    async function ensureTextFileCached(filename) {
+        if (Object.prototype.hasOwnProperty.call(fileContents, filename)) {
+            return true;
+        }
+
+        try {
+            const response = await fetch(buildFileURL(filename));
+            if (!response.ok) {
+                return false;
+            }
+            fileContents[filename] = await response.text();
+            return true;
+        } catch (_) {
+            return false;
+        }
     }
 
     async function openBinaryFile(filename, hintedContentType = '') {
@@ -1397,6 +1521,12 @@
             return;
         }
 
+        const selectedEntry = compileTarget;
+        if (!selectedEntry || !filesByPath[selectedEntry] || filesByPath[selectedEntry].isDir || !isCompilableFile(selectedEntry)) {
+            setStatus('Select a .tex or .typ file to compile', true);
+            return;
+        }
+
         setStatus('Saving all files...');
         const saved = await saveAll();
         if (!saved) return;
@@ -1405,7 +1535,6 @@
         hideError();
         updateCompileStat(null);
 
-        const mainContent = fileContents['main.tex'] || '';
         const compileBtn = document.getElementById('compile-btn');
         compileBtn.disabled = true;
         compileBtn.textContent = 'Compiling...';
@@ -1415,19 +1544,31 @@
             const response = await fetch(`/compile/${projectId}`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                body: `content=${encodeURIComponent(mainContent)}`
+                body: `entry=${encodeURIComponent(selectedEntry)}`
             });
 
-            const serverCompileMs = Number(response.headers.get('X-Latex-Compile-Ms'));
+            const serverCompileMs = Number(
+                response.headers.get('X-Compile-Ms') || response.headers.get('X-Latex-Compile-Ms')
+            );
             const compileMs = Number.isFinite(serverCompileMs) && serverCompileMs >= 0
                 ? serverCompileMs
                 : performance.now() - compileStartedAt;
+            const responseEntry = response.headers.get('X-Compile-Entry') || selectedEntry;
 
             if (response.ok) {
                 updateCompileStat(compileMs);
                 const pdfData = await response.arrayBuffer();
+                compileTarget = responseEntry;
+                const compileTargetSelect = document.getElementById('compile-target');
+                if (compileTargetSelect && Array.from(compileTargetSelect.options).some(option => option.value === compileTarget)) {
+                    compileTargetSelect.value = compileTarget;
+                }
+                const loaded = await ensureTextFileCached(compileTarget);
+                if (!loaded) {
+                    fileContents[compileTarget] = '';
+                }
                 await renderPDF(pdfData);
-                setStatus('Compiled successfully');
+                setStatus(`Compiled ${responseEntry}`);
             } else {
                 updateCompileStat(compileMs);
                 const errorText = await response.text();
@@ -1481,8 +1622,11 @@
             await loadFileList();
             await loadComments();
 
-            if (deletedCurrent && filesByPath['main.tex']) {
-                await openFile('main.tex');
+            if (deletedCurrent) {
+                const fallbackFile = getDefaultOpenFile();
+                if (fallbackFile) {
+                    await openFile(fallbackFile);
+                }
             }
             setStatus(`${filename} deleted`);
         } else {
@@ -1637,7 +1781,7 @@
             return;
         }
 
-        ['new-file-btn', 'new-folder-btn', 'upload-btn', 'save-btn', 'compile-btn', 'confirm-new-file']
+        ['new-file-btn', 'new-folder-btn', 'upload-btn', 'save-btn', 'compile-target', 'compile-btn', 'confirm-new-file']
             .forEach((id) => {
                 const element = document.getElementById(id);
                 if (!element) {
@@ -1709,8 +1853,27 @@
         return normalizePDFText(withoutCommands);
     }
 
+    function normalizeTypstLine(value) {
+        const withoutComments = value.split('//')[0];
+        const withoutMarkup = withoutComments
+            .replace(/#[a-zA-Z@]+\s*/g, ' ')
+            .replace(/[{}$&#_^~\\*\[\]<>`]/g, ' ');
+        return normalizePDFText(withoutMarkup);
+    }
+
+    function normalizeSourceLine(value) {
+        const ext = getFileExtension(compileTarget || '');
+        if (ext === '.tex') {
+            return normalizeTeXLine(value);
+        }
+        if (ext === '.typ') {
+            return normalizeTypstLine(value);
+        }
+        return normalizePDFText(value);
+    }
+
     function lineSearchNeedle(value) {
-        const normalized = normalizeTeXLine(value);
+        const normalized = normalizeSourceLine(value);
         if (normalized.length < 6) {
             return '';
         }
@@ -1743,7 +1906,7 @@
         lineToPageMap = new Map();
         pageToLinesMap = new Map();
 
-        const source = fileContents['main.tex'] || '';
+        const source = fileContents[compileTarget] || '';
         const lines = source.split(/\r?\n/);
         const pageNumbers = Array.from(pageTextMap.keys()).sort((a, b) => a - b);
         if (!lines.length || !pageNumbers.length) {
@@ -1897,7 +2060,7 @@
 
         setActivePDFPage(pageNumber, true);
         if (withMessage) {
-            setStatus(`main.tex:${lineNumber} -> PDF page ${pageNumber}`);
+            setStatus(`${compileTarget}:${lineNumber} -> PDF page ${pageNumber}`);
         }
     }
 
@@ -1906,8 +2069,13 @@
             return;
         }
 
-        if (currentFile !== 'main.tex') {
-            setStatus('Open main.tex to sync cursor with PDF', true);
+        if (!compileTarget) {
+            setStatus('Select a compile entry first', true);
+            return;
+        }
+
+        if (currentFile !== compileTarget) {
+            setStatus(`Open ${compileTarget} to sync cursor with PDF`, true);
             return;
         }
 
@@ -1918,7 +2086,7 @@
         showLineInPDF(position.lineNumber, true);
     }
 
-    async function jumpToTeXFromPage(pageNumber, event = null) {
+    async function jumpToSourceFromPage(pageNumber, event = null) {
         let positionRatio = 0.5;
         if (event && event.currentTarget) {
             const rect = event.currentTarget.getBoundingClientRect();
@@ -1929,11 +2097,16 @@
 
         const lineNumber = closestMappedLine(pageNumber, positionRatio);
         if (!lineNumber) {
-            setStatus('No TeX sync point found for this PDF page', true);
+            setStatus('No source sync point found for this PDF page', true);
             return;
         }
 
-        await openFile('main.tex');
+        if (!compileTarget) {
+            setStatus('Select a compile entry first', true);
+            return;
+        }
+
+        await openFile(compileTarget);
 
         const maxLine = editor.getModel().getLineCount();
         const safeLine = Math.min(Math.max(lineNumber, 1), maxLine);
@@ -1948,7 +2121,7 @@
         }, 0);
 
         setActivePDFPage(pageNumber, false);
-        setStatus(`PDF page ${pageNumber} -> main.tex:${safeLine}`);
+        setStatus(`PDF page ${pageNumber} -> ${compileTarget}:${safeLine}`);
     }
 
     async function renderPDF(data) {
@@ -1994,7 +2167,7 @@
             const pageWrapper = document.createElement('div');
             pageWrapper.className = 'pdf-page rounded-md overflow-hidden';
             pageWrapper.dataset.page = String(i);
-            pageWrapper.addEventListener('click', (event) => jumpToTeXFromPage(i, event));
+            pageWrapper.addEventListener('click', (event) => jumpToSourceFromPage(i, event));
 
             const canvas = document.createElement('canvas');
             canvas.width = Math.ceil(scaledViewport.width * devicePixelRatio);
@@ -2051,6 +2224,9 @@
     document.getElementById('pdf-fit-width').addEventListener('click', () => setPDFZoom(1));
     document.getElementById('show-in-pdf-btn').addEventListener('click', showCurrentLineInPDF);
     document.getElementById('save-btn').addEventListener('click', save);
+    document.getElementById('compile-target').addEventListener('change', (event) => {
+        compileTarget = event.target.value;
+    });
     document.getElementById('compile-btn').addEventListener('click', compile);
     applyWritePermissions();
     setSaveEnabled(canWrite);

@@ -15,10 +15,10 @@ type Server struct {
 	router      http.Handler
 }
 
-func NewServer(db *sql.DB, jwtSecret string, projectsDir string, tectonicBin string) (*Server, error) {
+func NewServer(db *sql.DB, jwtSecret string, projectsDir string, tectonicBin string, typstBin string) (*Server, error) {
 	s := &Server{
 		db:          db,
-		compiler:    NewCompiler(tectonicBin),
+		compiler:    NewCompiler(tectonicBin, typstBin),
 		jwtSecret:   []byte(jwtSecret),
 		projectsDir: projectsDir,
 	}

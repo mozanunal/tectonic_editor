@@ -574,13 +574,51 @@ func (s *Server) handleCompile(w http.ResponseWriter, r *http.Request) {
 	}
 	projectID := access.ProjectID
 
-	content := r.FormValue("content")
-	workDir := filepath.Join(s.projectsDir, projectID)
+	projectDir := filepath.Join(s.projectsDir, projectID)
+
+	entry := strings.TrimSpace(r.FormValue("entry"))
+	if entry == "" {
+		defaultEntry, err := defaultCompileEntry(projectDir)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		entry = defaultEntry
+	} else {
+		normalizedEntry, _, err := resolveProjectPath(projectDir, entry, false)
+		if err != nil {
+			http.Error(w, "Invalid compile entry", http.StatusBadRequest)
+			return
+		}
+		entry = normalizedEntry
+	}
+
+	if !isCompilableSource(entry) {
+		http.Error(w, "Compile entry must be a .tex or .typ file", http.StatusBadRequest)
+		return
+	}
+
+	entryPath := filepath.Join(projectDir, filepath.FromSlash(entry))
+	entryInfo, err := os.Stat(entryPath)
+	if os.IsNotExist(err) {
+		http.Error(w, "Compile entry file not found", http.StatusBadRequest)
+		return
+	}
+	if err != nil {
+		http.Error(w, "Failed to access compile entry", http.StatusInternalServerError)
+		return
+	}
+	if entryInfo.IsDir() {
+		http.Error(w, "Compile entry must be a file", http.StatusBadRequest)
+		return
+	}
 
 	compileStartedAt := time.Now()
-	pdf, output, err := s.compiler.Compile(content, workDir)
+	pdf, output, err := s.compiler.Compile(projectDir, entry)
 	compileDurationMs := time.Since(compileStartedAt).Milliseconds()
+	w.Header().Set("X-Compile-Ms", strconv.FormatInt(compileDurationMs, 10))
 	w.Header().Set("X-Latex-Compile-Ms", strconv.FormatInt(compileDurationMs, 10))
+	w.Header().Set("X-Compile-Entry", entry)
 	if err != nil {
 		w.Header().Set("Content-Type", "text/plain")
 		w.WriteHeader(http.StatusBadRequest)
@@ -662,6 +700,73 @@ var compilerArtifacts = map[string]struct{}{
 	"main.aux": {},
 }
 
+func isCompilableSource(name string) bool {
+	switch strings.ToLower(filepath.Ext(name)) {
+	case ".tex", ".typ":
+		return true
+	default:
+		return false
+	}
+}
+
+func defaultCompileEntry(projectDir string) (string, error) {
+	primaryCandidates := []string{"main.tex", "main.typ"}
+	for _, candidate := range primaryCandidates {
+		_, absPath, err := resolveProjectPath(projectDir, candidate, false)
+		if err != nil {
+			continue
+		}
+		info, statErr := os.Stat(absPath)
+		if statErr == nil && !info.IsDir() {
+			return candidate, nil
+		}
+		if statErr != nil && !os.IsNotExist(statErr) {
+			return "", statErr
+		}
+	}
+
+	var candidates []string
+	err := filepath.WalkDir(projectDir, func(currentPath string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if currentPath == projectDir {
+			return nil
+		}
+
+		relPath, err := filepath.Rel(projectDir, currentPath)
+		if err != nil {
+			return err
+		}
+		relPath = filepath.ToSlash(relPath)
+
+		if hasHiddenSegment(relPath) {
+			if entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
+		if entry.IsDir() {
+			return nil
+		}
+		if isCompilableSource(relPath) {
+			candidates = append(candidates, relPath)
+		}
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+
+	if len(candidates) == 0 {
+		return "", errors.New("No .tex or .typ entry file found")
+	}
+
+	sort.Strings(candidates)
+	return candidates[0], nil
+}
+
 func isTextFile(name string) bool {
 	ext := strings.ToLower(filepath.Ext(name))
 	if ext == "" {
@@ -682,7 +787,7 @@ func isTextFile(name string) bool {
 	}
 
 	textExts := []string{
-		".tex", ".ltx", ".bib", ".sty", ".cls", ".txt", ".md", ".bst", ".cfg", ".def",
+		".tex", ".ltx", ".typ", ".bib", ".sty", ".cls", ".txt", ".md", ".bst", ".cfg", ".def",
 		".json", ".yaml", ".yml", ".xml", ".csv", ".tsv", ".html", ".htm", ".css", ".js", ".ts",
 		".go", ".py", ".sh", ".toml", ".ini",
 	}
