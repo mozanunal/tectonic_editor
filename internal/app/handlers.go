@@ -7,6 +7,7 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -20,32 +21,109 @@ import (
 )
 
 type PageData struct {
-	User     *User
-	Projects []Project
-	Project  *Project
-	Content  string
-	Error    string
+	User                 *User
+	Users                []UserSummary
+	Projects             []Project
+	Project              *Project
+	ProjectMembers       []ProjectMember
+	Content              string
+	Error                string
+	Status               string
+	CanWrite             bool
+	CanManageMembers     bool
+	RegistrationDisabled bool
 }
 
 type Project struct {
+	ID         string
+	UserID     string
+	Name       string
+	Created    string
+	Updated    string
+	AccessRole string
+	OwnerEmail string
+}
+
+type UserSummary struct {
 	ID      string
-	UserID  string
+	Email   string
 	Name    string
-	Created string
-	Updated string
+	IsAdmin bool
+}
+
+type ProjectMember struct {
+	UserID  string
+	Email   string
+	Name    string
+	Role    string
+	IsOwner bool
+}
+
+type projectAccessLevel int
+
+const (
+	projectAccessRead projectAccessLevel = iota
+	projectAccessWrite
+	projectAccessManage
+)
+
+const (
+	projectRoleOwner     = "owner"
+	projectRoleReader    = "reader"
+	projectRoleCommenter = "commenter"
+	projectRoleWriter    = "writer"
+	projectRoleAdmin     = "admin"
+)
+
+type ProjectAccess struct {
+	ProjectID        string
+	OwnerID          string
+	MemberRole       string
+	EffectiveRole    string
+	CanRead          bool
+	CanWrite         bool
+	CanManageMembers bool
+	CanDeleteProject bool
 }
 
 func (s *Server) handleLoginPage(w http.ResponseWriter, r *http.Request) {
-	s.templates.ExecuteTemplate(w, "login.html", nil)
+	var userCount int
+	if err := s.db.QueryRow("SELECT COUNT(*) FROM users").Scan(&userCount); err != nil {
+		http.Error(w, "Failed to load login page", http.StatusInternalServerError)
+		return
+	}
+
+	s.templates.ExecuteTemplate(w, "login.html", PageData{
+		RegistrationDisabled: userCount > 0,
+	})
 }
 
 func (s *Server) handleRegisterPage(w http.ResponseWriter, r *http.Request) {
+	var userCount int
+	if err := s.db.QueryRow("SELECT COUNT(*) FROM users").Scan(&userCount); err != nil {
+		http.Error(w, "Failed to load register page", http.StatusInternalServerError)
+		return
+	}
+
+	if userCount > 0 {
+		s.templates.ExecuteTemplate(w, "register.html", PageData{
+			Error:                "Registration is disabled. Ask an admin to create your account.",
+			RegistrationDisabled: true,
+		})
+		return
+	}
+
 	s.templates.ExecuteTemplate(w, "register.html", nil)
 }
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
-	email := r.FormValue("email")
+	email := strings.ToLower(strings.TrimSpace(r.FormValue("email")))
 	password := r.FormValue("password")
+	registrationDisabled := true
+	var userCount int
+	if err := s.db.QueryRow("SELECT COUNT(*) FROM users").Scan(&userCount); err == nil {
+		registrationDisabled = userCount > 0
+	}
 
 	var user struct {
 		ID           string
@@ -60,13 +138,19 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	).Scan(&user.ID, &user.Email, &user.PasswordHash, &user.Name)
 
 	if err != nil || !checkPassword(password, user.PasswordHash) {
-		s.templates.ExecuteTemplate(w, "login.html", PageData{Error: "Invalid credentials"})
+		s.templates.ExecuteTemplate(w, "login.html", PageData{
+			Error:                "Invalid credentials",
+			RegistrationDisabled: registrationDisabled,
+		})
 		return
 	}
 
 	token, err := s.createToken(user.ID, user.Email)
 	if err != nil {
-		s.templates.ExecuteTemplate(w, "login.html", PageData{Error: "Login failed"})
+		s.templates.ExecuteTemplate(w, "login.html", PageData{
+			Error:                "Login failed",
+			RegistrationDisabled: registrationDisabled,
+		})
 		return
 	}
 
@@ -82,9 +166,26 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
-	email := r.FormValue("email")
+	email := strings.ToLower(strings.TrimSpace(r.FormValue("email")))
 	password := r.FormValue("password")
 	name := r.FormValue("name")
+
+	var userCount int
+	if err := s.db.QueryRow("SELECT COUNT(*) FROM users").Scan(&userCount); err != nil {
+		s.templates.ExecuteTemplate(w, "register.html", PageData{Error: "Registration failed"})
+		return
+	}
+	if userCount > 0 {
+		s.templates.ExecuteTemplate(w, "register.html", PageData{
+			Error:                "Registration is disabled. Ask an admin to create your account.",
+			RegistrationDisabled: true,
+		})
+		return
+	}
+	isAdmin := 0
+	if userCount == 0 {
+		isAdmin = 1
+	}
 
 	hash, err := hashPassword(password)
 	if err != nil {
@@ -94,8 +195,8 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 
 	id := uuid.New().String()
 	_, err = s.db.Exec(
-		"INSERT INTO users (id, email, password_hash, name) VALUES (?, ?, ?, ?)",
-		id, email, hash, name,
+		"INSERT INTO users (id, email, password_hash, name, is_admin) VALUES (?, ?, ?, ?, ?)",
+		id, email, hash, name, isAdmin,
 	)
 
 	if err != nil {
@@ -136,8 +237,20 @@ func (s *Server) handleProjectsPage(w http.ResponseWriter, r *http.Request) {
 	user := getUserFromContext(r.Context())
 
 	rows, err := s.db.Query(
-		"SELECT id, user_id, name, created, updated FROM projects WHERE user_id = ? ORDER BY updated DESC",
-		user.ID,
+		`
+		SELECT p.id, p.user_id, p.name, p.created, p.updated,
+			CASE
+				WHEN p.user_id = ? THEN ?
+				ELSE COALESCE(pm.role, '')
+			END AS access_role,
+			owner.email
+		FROM projects p
+		JOIN users owner ON owner.id = p.user_id
+		LEFT JOIN project_members pm ON pm.project_id = p.id AND pm.user_id = ?
+		WHERE p.user_id = ? OR pm.user_id = ?
+		ORDER BY p.updated DESC
+		`,
+		user.ID, projectRoleOwner, user.ID, user.ID, user.ID,
 	)
 	if err != nil {
 		http.Error(w, "Failed to load projects", http.StatusInternalServerError)
@@ -148,14 +261,55 @@ func (s *Server) handleProjectsPage(w http.ResponseWriter, r *http.Request) {
 	var projects []Project
 	for rows.Next() {
 		var p Project
-		rows.Scan(&p.ID, &p.UserID, &p.Name, &p.Created, &p.Updated)
+		if err := rows.Scan(&p.ID, &p.UserID, &p.Name, &p.Created, &p.Updated, &p.AccessRole, &p.OwnerEmail); err != nil {
+			http.Error(w, "Failed to load projects", http.StatusInternalServerError)
+			return
+		}
 		projects = append(projects, p)
 	}
+	if err := rows.Err(); err != nil {
+		http.Error(w, "Failed to load projects", http.StatusInternalServerError)
+		return
+	}
 
-	s.templates.ExecuteTemplate(w, "projects.html", PageData{
+	var users []UserSummary
+	if user.IsAdmin {
+		userRows, err := s.db.Query("SELECT id, email, name, is_admin FROM users ORDER BY email ASC")
+		if err != nil {
+			http.Error(w, "Failed to load users", http.StatusInternalServerError)
+			return
+		}
+		defer userRows.Close()
+
+		for userRows.Next() {
+			var candidate UserSummary
+			var name sql.NullString
+			var isAdmin int
+			if err := userRows.Scan(&candidate.ID, &candidate.Email, &name, &isAdmin); err != nil {
+				http.Error(w, "Failed to load users", http.StatusInternalServerError)
+				return
+			}
+			if name.Valid {
+				candidate.Name = name.String
+			}
+			candidate.IsAdmin = isAdmin == 1
+			users = append(users, candidate)
+		}
+		if err := userRows.Err(); err != nil {
+			http.Error(w, "Failed to load users", http.StatusInternalServerError)
+			return
+		}
+	}
+
+	pageData := PageData{
 		User:     user,
+		Users:    users,
 		Projects: projects,
-	})
+		Status:   strings.TrimSpace(r.URL.Query().Get("status")),
+		Error:    strings.TrimSpace(r.URL.Query().Get("error")),
+	}
+
+	s.templates.ExecuteTemplate(w, "projects.html", pageData)
 }
 
 func (s *Server) handleCreateProject(w http.ResponseWriter, r *http.Request) {
@@ -190,13 +344,146 @@ Hello, World!
 	http.Redirect(w, r, "/editor/"+id, http.StatusSeeOther)
 }
 
-func (s *Server) handleDeleteProject(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleAdminCreateUser(w http.ResponseWriter, r *http.Request) {
 	user := getUserFromContext(r.Context())
-	projectID := chi.URLParam(r, "id")
+	if user == nil || !user.IsAdmin {
+		http.Error(w, "Forbidden", http.StatusForbidden)
+		return
+	}
+
+	email := strings.ToLower(strings.TrimSpace(r.FormValue("email")))
+	password := r.FormValue("password")
+	name := strings.TrimSpace(r.FormValue("name"))
+
+	if email == "" || password == "" {
+		redirectWithMessage(w, r, "/", "", "Email and password are required")
+		return
+	}
+	if len(password) < 6 {
+		redirectWithMessage(w, r, "/", "", "Password must be at least 6 characters")
+		return
+	}
+
+	var exists bool
+	if err := s.db.QueryRow("SELECT EXISTS(SELECT 1 FROM users WHERE lower(email) = lower(?))", email).Scan(&exists); err != nil {
+		http.Error(w, "Failed to check user", http.StatusInternalServerError)
+		return
+	}
+	if exists {
+		redirectWithMessage(w, r, "/", "", "A user with this email already exists")
+		return
+	}
+
+	hash, err := hashPassword(password)
+	if err != nil {
+		http.Error(w, "Failed to create user", http.StatusInternalServerError)
+		return
+	}
+
+	isAdmin := 0
+	if r.FormValue("is_admin") == "1" {
+		isAdmin = 1
+	}
+
+	_, err = s.db.Exec(
+		"INSERT INTO users (id, email, password_hash, name, is_admin) VALUES (?, ?, ?, ?, ?)",
+		uuid.New().String(), email, hash, name, isAdmin,
+	)
+	if err != nil {
+		http.Error(w, "Failed to create user", http.StatusInternalServerError)
+		return
+	}
+
+	redirectWithMessage(w, r, "/", "User created", "")
+}
+
+func (s *Server) handleAddProjectMember(w http.ResponseWriter, r *http.Request) {
+	access, ok := s.requireProjectAccess(w, r, projectAccessManage)
+	if !ok {
+		return
+	}
+
+	email := strings.ToLower(strings.TrimSpace(r.FormValue("email")))
+	role, roleValid := normalizeMemberRole(r.FormValue("role"))
+	if email == "" || !roleValid {
+		redirectWithMessage(w, r, "/editor/"+access.ProjectID, "", "Valid email and role are required")
+		return
+	}
+
+	var memberID string
+	err := s.db.QueryRow("SELECT id FROM users WHERE lower(email) = lower(?)", email).Scan(&memberID)
+	if err == sql.ErrNoRows {
+		redirectWithMessage(w, r, "/editor/"+access.ProjectID, "", "User not found")
+		return
+	}
+	if err != nil {
+		http.Error(w, "Failed to add project member", http.StatusInternalServerError)
+		return
+	}
+
+	if memberID == access.OwnerID {
+		redirectWithMessage(w, r, "/editor/"+access.ProjectID, "", "Owner already has full access")
+		return
+	}
+
+	_, err = s.db.Exec(
+		`INSERT INTO project_members (project_id, user_id, role)
+		VALUES (?, ?, ?)
+		ON CONFLICT(project_id, user_id)
+		DO UPDATE SET role = excluded.role, updated = datetime('now')`,
+		access.ProjectID, memberID, role,
+	)
+	if err != nil {
+		http.Error(w, "Failed to add project member", http.StatusInternalServerError)
+		return
+	}
+
+	redirectWithMessage(w, r, "/editor/"+access.ProjectID, "Member access updated", "")
+}
+
+func (s *Server) handleRemoveProjectMember(w http.ResponseWriter, r *http.Request) {
+	access, ok := s.requireProjectAccess(w, r, projectAccessManage)
+	if !ok {
+		return
+	}
+
+	memberID := strings.TrimSpace(chi.URLParam(r, "userID"))
+	if memberID == "" {
+		redirectWithMessage(w, r, "/editor/"+access.ProjectID, "", "Member ID is required")
+		return
+	}
+	if memberID == access.OwnerID {
+		redirectWithMessage(w, r, "/editor/"+access.ProjectID, "", "Owner cannot be removed")
+		return
+	}
+
+	_, err := s.db.Exec(
+		"DELETE FROM project_members WHERE project_id = ? AND user_id = ?",
+		access.ProjectID, memberID,
+	)
+	if err != nil {
+		http.Error(w, "Failed to remove project member", http.StatusInternalServerError)
+		return
+	}
+
+	redirectWithMessage(w, r, "/editor/"+access.ProjectID, "Member removed", "")
+}
+
+func (s *Server) handleDeleteProject(w http.ResponseWriter, r *http.Request) {
+	access, ok := s.requireProjectAccess(w, r, projectAccessManage)
+	if !ok {
+		return
+	}
+
+	_, err := s.db.Exec("DELETE FROM project_members WHERE project_id = ?", access.ProjectID)
+	if err != nil {
+		http.Error(w, "Failed to delete project", http.StatusInternalServerError)
+		return
+	}
 
 	result, err := s.db.Exec(
-		"DELETE FROM projects WHERE id = ? AND user_id = ?",
-		projectID, user.ID,
+		"DELETE FROM projects WHERE id = ?",
+		access.ProjectID,
 	)
 	if err != nil {
 		http.Error(w, "Failed to delete project", http.StatusInternalServerError)
@@ -209,7 +496,7 @@ func (s *Server) handleDeleteProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	projectDir := filepath.Join(s.projectsDir, projectID)
+	projectDir := filepath.Join(s.projectsDir, access.ProjectID)
 	os.RemoveAll(projectDir)
 
 	w.WriteHeader(http.StatusOK)
@@ -219,41 +506,57 @@ func (s *Server) handleEditorPage(w http.ResponseWriter, r *http.Request) {
 	user := getUserFromContext(r.Context())
 	projectID := chi.URLParam(r, "id")
 
-	var project Project
-	err := s.db.QueryRow(
-		"SELECT id, user_id, name, created, updated FROM projects WHERE id = ? AND user_id = ?",
-		projectID, user.ID,
-	).Scan(&project.ID, &project.UserID, &project.Name, &project.Created, &project.Updated)
-
-	if err != nil {
+	access, err := s.getProjectAccess(user, projectID)
+	if err == sql.ErrNoRows || !access.CanRead {
 		http.Redirect(w, r, "/", http.StatusSeeOther)
 		return
 	}
+	if err != nil {
+		http.Error(w, "Failed to load project", http.StatusInternalServerError)
+		return
+	}
+
+	var project Project
+	err = s.db.QueryRow(
+		`SELECT p.id, p.user_id, p.name, p.created, p.updated, owner.email
+		FROM projects p
+		JOIN users owner ON owner.id = p.user_id
+		WHERE p.id = ?`,
+		projectID,
+	).Scan(&project.ID, &project.UserID, &project.Name, &project.Created, &project.Updated, &project.OwnerEmail)
+	if err != nil {
+		http.Error(w, "Failed to load project", http.StatusInternalServerError)
+		return
+	}
+	project.AccessRole = access.EffectiveRole
 
 	texPath := filepath.Join(s.projectsDir, projectID, "main.tex")
 	content, _ := os.ReadFile(texPath)
 
+	members, err := s.listProjectMembers(projectID)
+	if err != nil {
+		http.Error(w, "Failed to load project members", http.StatusInternalServerError)
+		return
+	}
+
 	s.templates.ExecuteTemplate(w, "editor.html", PageData{
-		User:    user,
-		Project: &project,
-		Content: string(content),
+		User:             user,
+		Project:          &project,
+		ProjectMembers:   members,
+		Content:          string(content),
+		Status:           strings.TrimSpace(r.URL.Query().Get("status")),
+		Error:            strings.TrimSpace(r.URL.Query().Get("error")),
+		CanWrite:         access.CanWrite,
+		CanManageMembers: access.CanManageMembers,
 	})
 }
 
 func (s *Server) handleCompile(w http.ResponseWriter, r *http.Request) {
-	user := getUserFromContext(r.Context())
-	projectID := chi.URLParam(r, "id")
-
-	var exists bool
-	s.db.QueryRow(
-		"SELECT 1 FROM projects WHERE id = ? AND user_id = ?",
-		projectID, user.ID,
-	).Scan(&exists)
-
-	if !exists {
-		http.Error(w, "Project not found", http.StatusNotFound)
+	access, ok := s.requireProjectAccess(w, r, projectAccessWrite)
+	if !ok {
 		return
 	}
+	projectID := access.ProjectID
 
 	content := r.FormValue("content")
 	workDir := filepath.Join(s.projectsDir, projectID)
@@ -276,19 +579,11 @@ func (s *Server) handleCompile(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSave(w http.ResponseWriter, r *http.Request) {
-	user := getUserFromContext(r.Context())
-	projectID := chi.URLParam(r, "id")
-
-	var exists bool
-	s.db.QueryRow(
-		"SELECT 1 FROM projects WHERE id = ? AND user_id = ?",
-		projectID, user.ID,
-	).Scan(&exists)
-
-	if !exists {
-		http.Error(w, "Project not found", http.StatusNotFound)
+	access, ok := s.requireProjectAccess(w, r, projectAccessWrite)
+	if !ok {
 		return
 	}
+	projectID := access.ProjectID
 
 	content := r.FormValue("content")
 	texPath := filepath.Join(s.projectsDir, projectID, "main.tex")
@@ -304,19 +599,11 @@ func (s *Server) handleSave(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleGetPDF(w http.ResponseWriter, r *http.Request) {
-	user := getUserFromContext(r.Context())
-	projectID := chi.URLParam(r, "id")
-
-	var exists bool
-	s.db.QueryRow(
-		"SELECT 1 FROM projects WHERE id = ? AND user_id = ?",
-		projectID, user.ID,
-	).Scan(&exists)
-
-	if !exists {
-		http.Error(w, "Project not found", http.StatusNotFound)
+	access, ok := s.requireProjectAccess(w, r, projectAccessRead)
+	if !ok {
 		return
 	}
+	projectID := access.ProjectID
 
 	pdfPath := filepath.Join(s.projectsDir, projectID, "main.pdf")
 	pdf, err := os.ReadFile(pdfPath)
@@ -417,17 +704,176 @@ func detectContentType(name string, content []byte) string {
 	return detected
 }
 
-func (s *Server) verifyProjectAccess(r *http.Request) (string, bool) {
+func normalizeMemberRole(input string) (string, bool) {
+	switch strings.ToLower(strings.TrimSpace(input)) {
+	case projectRoleReader:
+		return projectRoleReader, true
+	case projectRoleCommenter:
+		return projectRoleCommenter, true
+	case projectRoleWriter:
+		return projectRoleWriter, true
+	default:
+		return "", false
+	}
+}
+
+func hasRequiredProjectAccess(access ProjectAccess, required projectAccessLevel) bool {
+	switch required {
+	case projectAccessRead:
+		return access.CanRead
+	case projectAccessWrite:
+		return access.CanWrite
+	case projectAccessManage:
+		return access.CanManageMembers
+	default:
+		return false
+	}
+}
+
+func (s *Server) getProjectAccess(user *User, projectID string) (ProjectAccess, error) {
+	var ownerID string
+	var memberRole sql.NullString
+	err := s.db.QueryRow(
+		`SELECT p.user_id, pm.role
+		FROM projects p
+		LEFT JOIN project_members pm ON pm.project_id = p.id AND pm.user_id = ?
+		WHERE p.id = ?`,
+		user.ID, projectID,
+	).Scan(&ownerID, &memberRole)
+	if err != nil {
+		return ProjectAccess{}, err
+	}
+
+	access := ProjectAccess{
+		ProjectID: projectID,
+		OwnerID:   ownerID,
+	}
+	if memberRole.Valid {
+		access.MemberRole = memberRole.String
+	}
+
+	if user.IsAdmin {
+		access.EffectiveRole = projectRoleAdmin
+		access.CanRead = true
+		access.CanWrite = true
+		access.CanManageMembers = true
+		access.CanDeleteProject = true
+		return access, nil
+	}
+
+	if ownerID == user.ID {
+		access.EffectiveRole = projectRoleOwner
+		access.CanRead = true
+		access.CanWrite = true
+		access.CanManageMembers = true
+		access.CanDeleteProject = true
+		return access, nil
+	}
+
+	switch access.MemberRole {
+	case projectRoleWriter:
+		access.EffectiveRole = projectRoleWriter
+		access.CanRead = true
+		access.CanWrite = true
+	case projectRoleCommenter:
+		access.EffectiveRole = projectRoleCommenter
+		access.CanRead = true
+	case projectRoleReader:
+		access.EffectiveRole = projectRoleReader
+		access.CanRead = true
+	}
+
+	return access, nil
+}
+
+func (s *Server) requireProjectAccess(w http.ResponseWriter, r *http.Request, required projectAccessLevel) (ProjectAccess, bool) {
 	user := getUserFromContext(r.Context())
 	projectID := chi.URLParam(r, "id")
 
-	var exists bool
-	s.db.QueryRow(
-		"SELECT 1 FROM projects WHERE id = ? AND user_id = ?",
-		projectID, user.ID,
-	).Scan(&exists)
+	access, err := s.getProjectAccess(user, projectID)
+	if err == sql.ErrNoRows {
+		http.Error(w, "Project not found", http.StatusNotFound)
+		return ProjectAccess{}, false
+	}
+	if err != nil {
+		http.Error(w, "Failed to load project permissions", http.StatusInternalServerError)
+		return ProjectAccess{}, false
+	}
+	if !hasRequiredProjectAccess(access, required) {
+		http.Error(w, "Forbidden", http.StatusForbidden)
+		return ProjectAccess{}, false
+	}
 
-	return projectID, exists
+	return access, true
+}
+
+func (s *Server) listProjectMembers(projectID string) ([]ProjectMember, error) {
+	var owner ProjectMember
+	var ownerName sql.NullString
+	err := s.db.QueryRow(
+		`SELECT u.id, u.email, u.name
+		FROM projects p
+		JOIN users u ON u.id = p.user_id
+		WHERE p.id = ?`,
+		projectID,
+	).Scan(&owner.UserID, &owner.Email, &ownerName)
+	if err != nil {
+		return nil, err
+	}
+	if ownerName.Valid {
+		owner.Name = ownerName.String
+	}
+	owner.Role = projectRoleOwner
+	owner.IsOwner = true
+
+	rows, err := s.db.Query(
+		`SELECT u.id, u.email, u.name, pm.role
+		FROM project_members pm
+		JOIN users u ON u.id = pm.user_id
+		JOIN projects p ON p.id = pm.project_id
+		WHERE pm.project_id = ? AND pm.user_id <> p.user_id
+		ORDER BY u.email ASC`,
+		projectID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	members := []ProjectMember{owner}
+	for rows.Next() {
+		var member ProjectMember
+		var name sql.NullString
+		if err := rows.Scan(&member.UserID, &member.Email, &name, &member.Role); err != nil {
+			return nil, err
+		}
+		if name.Valid {
+			member.Name = name.String
+		}
+		members = append(members, member)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return members, nil
+}
+
+func redirectWithMessage(w http.ResponseWriter, r *http.Request, path string, statusMessage string, errorMessage string) {
+	values := url.Values{}
+	if statusMessage != "" {
+		values.Set("status", statusMessage)
+	}
+	if errorMessage != "" {
+		values.Set("error", errorMessage)
+	}
+
+	target := path
+	if encoded := values.Encode(); encoded != "" {
+		target = target + "?" + encoded
+	}
+
+	http.Redirect(w, r, target, http.StatusSeeOther)
 }
 
 func normalizeProjectPath(input string, allowEmpty bool) (string, error) {
@@ -519,11 +965,11 @@ func (s *Server) touchProject(projectID string) {
 }
 
 func (s *Server) handleListFiles(w http.ResponseWriter, r *http.Request) {
-	projectID, ok := s.verifyProjectAccess(r)
+	access, ok := s.requireProjectAccess(w, r, projectAccessRead)
 	if !ok {
-		http.Error(w, "Project not found", http.StatusNotFound)
 		return
 	}
+	projectID := access.ProjectID
 
 	projectDir := filepath.Join(s.projectsDir, projectID)
 	var files []FileInfo
@@ -587,11 +1033,11 @@ func (s *Server) handleListFiles(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleCreateFile(w http.ResponseWriter, r *http.Request) {
-	projectID, ok := s.verifyProjectAccess(r)
+	access, ok := s.requireProjectAccess(w, r, projectAccessWrite)
 	if !ok {
-		http.Error(w, "Project not found", http.StatusNotFound)
 		return
 	}
+	projectID := access.ProjectID
 
 	projectDir := filepath.Join(s.projectsDir, projectID)
 	_, filePath, err := resolveProjectPath(projectDir, r.FormValue("filename"), false)
@@ -627,11 +1073,11 @@ func (s *Server) handleCreateFile(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleUploadFile(w http.ResponseWriter, r *http.Request) {
-	projectID, ok := s.verifyProjectAccess(r)
+	access, ok := s.requireProjectAccess(w, r, projectAccessWrite)
 	if !ok {
-		http.Error(w, "Project not found", http.StatusNotFound)
 		return
 	}
+	projectID := access.ProjectID
 
 	r.ParseMultipartForm(32 << 20)
 
@@ -671,11 +1117,11 @@ func (s *Server) handleUploadFile(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleGetFile(w http.ResponseWriter, r *http.Request) {
-	projectID, ok := s.verifyProjectAccess(r)
+	access, ok := s.requireProjectAccess(w, r, projectAccessRead)
 	if !ok {
-		http.Error(w, "Project not found", http.StatusNotFound)
 		return
 	}
+	projectID := access.ProjectID
 
 	projectDir := filepath.Join(s.projectsDir, projectID)
 	filename, filePath, err := resolveProjectPath(projectDir, chi.URLParam(r, "*"), false)
@@ -704,11 +1150,11 @@ func (s *Server) handleGetFile(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleUpdateFile(w http.ResponseWriter, r *http.Request) {
-	projectID, ok := s.verifyProjectAccess(r)
+	access, ok := s.requireProjectAccess(w, r, projectAccessWrite)
 	if !ok {
-		http.Error(w, "Project not found", http.StatusNotFound)
 		return
 	}
+	projectID := access.ProjectID
 
 	projectDir := filepath.Join(s.projectsDir, projectID)
 	_, filePath, err := resolveProjectPath(projectDir, chi.URLParam(r, "*"), false)
@@ -742,11 +1188,11 @@ func (s *Server) handleUpdateFile(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleDeleteFile(w http.ResponseWriter, r *http.Request) {
-	projectID, ok := s.verifyProjectAccess(r)
+	access, ok := s.requireProjectAccess(w, r, projectAccessWrite)
 	if !ok {
-		http.Error(w, "Project not found", http.StatusNotFound)
 		return
 	}
+	projectID := access.ProjectID
 
 	projectDir := filepath.Join(s.projectsDir, projectID)
 	filename, filePath, err := resolveProjectPath(projectDir, chi.URLParam(r, "*"), false)
@@ -785,11 +1231,11 @@ func (s *Server) handleDeleteFile(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleMoveFile(w http.ResponseWriter, r *http.Request) {
-	projectID, ok := s.verifyProjectAccess(r)
+	access, ok := s.requireProjectAccess(w, r, projectAccessWrite)
 	if !ok {
-		http.Error(w, "Project not found", http.StatusNotFound)
 		return
 	}
+	projectID := access.ProjectID
 
 	projectDir := filepath.Join(s.projectsDir, projectID)
 

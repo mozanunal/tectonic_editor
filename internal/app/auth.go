@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"net/http"
 	"time"
@@ -15,9 +16,10 @@ type contextKey string
 const userContextKey contextKey = "user"
 
 type User struct {
-	ID    string
-	Email string
-	Name  string
+	ID      string
+	Email   string
+	Name    string
+	IsAdmin bool
 }
 
 type Claims struct {
@@ -80,9 +82,28 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
+		var dbUser struct {
+			ID      string
+			Email   string
+			Name    sql.NullString
+			IsAdmin int
+		}
+		err = s.db.QueryRow(
+			"SELECT id, email, name, is_admin FROM users WHERE id = ?",
+			claims.UserID,
+		).Scan(&dbUser.ID, &dbUser.Email, &dbUser.Name, &dbUser.IsAdmin)
+		if err != nil {
+			http.Redirect(w, r, "/login", http.StatusSeeOther)
+			return
+		}
+
 		user := &User{
-			ID:    claims.UserID,
-			Email: claims.Email,
+			ID:      dbUser.ID,
+			Email:   dbUser.Email,
+			IsAdmin: dbUser.IsAdmin == 1,
+		}
+		if dbUser.Name.Valid {
+			user.Name = dbUser.Name.String
 		}
 
 		ctx := context.WithValue(r.Context(), userContextKey, user)

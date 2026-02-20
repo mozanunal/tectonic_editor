@@ -17,6 +17,7 @@
         </div>
         {{end}}
 
+        {{if not .RegistrationDisabled}}
         <form method="POST" action="/register" class="space-y-4">
             <div>
                 <label class="block text-sm font-medium text-gray-700 mb-1">Name</label>
@@ -38,10 +39,15 @@
                 Create Account
             </button>
         </form>
+        {{end}}
 
         <p class="mt-4 text-center text-sm text-gray-600">
+            {{if .RegistrationDisabled}}
+            <a href="/login" class="text-blue-600 hover:underline">Go to sign in</a>
+            {{else}}
             Already have an account?
             <a href="/login" class="text-blue-600 hover:underline">Sign In</a>
+            {{end}}
         </p>
     </div>
 </div>

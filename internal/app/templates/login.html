@@ -35,8 +35,12 @@
         </form>
 
         <p class="mt-4 text-center text-sm text-gray-600">
+            {{if .RegistrationDisabled}}
+            Ask an admin to create your account.
+            {{else}}
             Don't have an account?
             <a href="/register" class="text-blue-600 hover:underline">Register</a>
+            {{end}}
         </p>
     </div>
 </div>

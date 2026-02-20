@@ -2,6 +2,7 @@ package db
 
 import (
 	"database/sql"
+	"fmt"
 
 	_ "modernc.org/sqlite"
 )
@@ -29,6 +30,7 @@ func migrate(db *sql.DB) error {
 		email TEXT UNIQUE NOT NULL,
 		password_hash TEXT NOT NULL,
 		name TEXT,
+		is_admin INTEGER NOT NULL DEFAULT 0,
 		created TEXT DEFAULT (datetime('now')),
 		updated TEXT DEFAULT (datetime('now'))
 	) STRICT;
@@ -43,8 +45,98 @@ func migrate(db *sql.DB) error {
 	) STRICT;
 
 	CREATE INDEX IF NOT EXISTS idx_projects_user_id ON projects(user_id);
+
+	CREATE TABLE IF NOT EXISTS project_members (
+		project_id TEXT NOT NULL,
+		user_id TEXT NOT NULL,
+		role TEXT NOT NULL CHECK (role IN ('reader', 'commenter', 'writer')),
+		created TEXT DEFAULT (datetime('now')),
+		updated TEXT DEFAULT (datetime('now')),
+		PRIMARY KEY (project_id, user_id),
+		FOREIGN KEY (project_id) REFERENCES projects(id),
+		FOREIGN KEY (user_id) REFERENCES users(id)
+	) STRICT;
+
+	CREATE INDEX IF NOT EXISTS idx_project_members_user_id ON project_members(user_id);
+	CREATE INDEX IF NOT EXISTS idx_project_members_project_id ON project_members(project_id);
 	`
 
-	_, err := db.Exec(schema)
+	if _, err := db.Exec(schema); err != nil {
+		return err
+	}
+
+	if err := ensureUsersAdminColumn(db); err != nil {
+		return err
+	}
+
+	if err := ensureFirstAdmin(db); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func ensureUsersAdminColumn(db *sql.DB) error {
+	exists, err := columnExists(db, "users", "is_admin")
+	if err != nil {
+		return err
+	}
+	if exists {
+		return nil
+	}
+
+	_, err = db.Exec("ALTER TABLE users ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0")
 	return err
+}
+
+func ensureFirstAdmin(db *sql.DB) error {
+	var adminCount int
+	if err := db.QueryRow("SELECT COUNT(*) FROM users WHERE is_admin = 1").Scan(&adminCount); err != nil {
+		return err
+	}
+	if adminCount > 0 {
+		return nil
+	}
+
+	_, err := db.Exec(`
+		UPDATE users
+		SET is_admin = 1
+		WHERE id = (
+			SELECT id
+			FROM users
+			ORDER BY created ASC, id ASC
+			LIMIT 1
+		)
+	`)
+	return err
+}
+
+func columnExists(db *sql.DB, tableName string, columnName string) (bool, error) {
+	rows, err := db.Query(fmt.Sprintf("PRAGMA table_info(%s)", tableName))
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var cid int
+		var name string
+		var columnType string
+		var notNull int
+		var defaultValue sql.NullString
+		var primaryKey int
+
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			return false, err
+		}
+		if name == columnName {
+			return true, nil
+		}
+	}
+
+	if err := rows.Err(); err != nil {
+		return false, err
+	}
+
+	return false, nil
 }

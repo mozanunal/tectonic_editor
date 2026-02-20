@@ -29,6 +29,9 @@ func (s *Server) setupRoutes() http.Handler {
 		r.Get("/", s.handleProjectsPage)
 		r.Post("/projects", s.handleCreateProject)
 		r.Delete("/projects/{id}", s.handleDeleteProject)
+		r.Post("/projects/{id}/members", s.handleAddProjectMember)
+		r.Post("/projects/{id}/members/{userID}/remove", s.handleRemoveProjectMember)
+		r.Post("/admin/users", s.handleAdminCreateUser)
 
 		r.Get("/editor/{id}", s.handleEditorPage)
 		r.Post("/compile/{id}", s.handleCompile)
