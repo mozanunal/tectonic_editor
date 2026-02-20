@@ -30,6 +30,7 @@ type PageData struct {
 	Error                string
 	Status               string
 	CanWrite             bool
+	CanComment           bool
 	CanManageMembers     bool
 	RegistrationDisabled bool
 }
@@ -508,6 +509,8 @@ func (s *Server) handleDeleteProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	s.db.Exec("DELETE FROM comments WHERE project_id = ?", access.ProjectID)
+
 	projectDir := filepath.Join(s.projectsDir, access.ProjectID)
 	os.RemoveAll(projectDir)
 
@@ -559,6 +562,7 @@ func (s *Server) handleEditorPage(w http.ResponseWriter, r *http.Request) {
 		Status:           strings.TrimSpace(r.URL.Query().Get("status")),
 		Error:            strings.TrimSpace(r.URL.Query().Get("error")),
 		CanWrite:         access.CanWrite,
+		CanComment:       canCommentOnProject(access),
 		CanManageMembers: access.CanManageMembers,
 	})
 }
@@ -635,6 +639,21 @@ type FileInfo struct {
 	Size        int64  `json:"size"`
 	IsText      bool   `json:"isText"`
 	ContentType string `json:"contentType"`
+}
+
+type Comment struct {
+	ID          string `json:"id"`
+	ProjectID   string `json:"projectId"`
+	FilePath    string `json:"filePath"`
+	StartLine   int    `json:"startLine"`
+	EndLine     int    `json:"endLine"`
+	Body        string `json:"body"`
+	Snippet     string `json:"snippet"`
+	AuthorID    string `json:"authorId"`
+	AuthorEmail string `json:"authorEmail"`
+	Created     string `json:"created"`
+	Updated     string `json:"updated"`
+	CanDelete   bool   `json:"canDelete"`
 }
 
 var compilerArtifacts = map[string]struct{}{
@@ -716,6 +735,14 @@ func detectContentType(name string, content []byte) string {
 	return detected
 }
 
+func parseLineValue(value string) (int, error) {
+	line, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil || line < 1 {
+		return 0, errors.New("invalid line number")
+	}
+	return line, nil
+}
+
 func normalizeMemberRole(input string) (string, bool) {
 	switch strings.ToLower(strings.TrimSpace(input)) {
 	case projectRoleReader:
@@ -740,6 +767,13 @@ func hasRequiredProjectAccess(access ProjectAccess, required projectAccessLevel)
 	default:
 		return false
 	}
+}
+
+func canCommentOnProject(access ProjectAccess) bool {
+	if access.CanWrite || access.CanManageMembers {
+		return true
+	}
+	return access.EffectiveRole == projectRoleCommenter
 }
 
 func (s *Server) getProjectAccess(user *User, projectID string) (ProjectAccess, error) {
@@ -974,6 +1008,214 @@ func shouldSkipFileListEntry(rel string, isDir bool) bool {
 
 func (s *Server) touchProject(projectID string) {
 	s.db.Exec("UPDATE projects SET updated = datetime('now') WHERE id = ?", projectID)
+}
+
+func (s *Server) deleteCommentsForPath(projectID, path string) {
+	pathPrefix := path + "/%"
+	s.db.Exec(
+		"DELETE FROM comments WHERE project_id = ? AND (file_path = ? OR file_path LIKE ?)",
+		projectID, path, pathPrefix,
+	)
+}
+
+func (s *Server) moveCommentsForPath(projectID, sourcePath, targetPath string) {
+	pathPrefix := sourcePath + "/%"
+	s.db.Exec(
+		`UPDATE comments
+		SET file_path = ? || substr(file_path, ?), updated = datetime('now')
+		WHERE project_id = ? AND (file_path = ? OR file_path LIKE ?)`,
+		targetPath, len(sourcePath)+1, projectID, sourcePath, pathPrefix,
+	)
+}
+
+func (s *Server) handleListComments(w http.ResponseWriter, r *http.Request) {
+	user := getUserFromContext(r.Context())
+	access, ok := s.requireProjectAccess(w, r, projectAccessRead)
+	if !ok {
+		return
+	}
+	projectID := access.ProjectID
+
+	queryPath := r.URL.Query().Get("file")
+	filePath, err := normalizeProjectPath(queryPath, true)
+	if err != nil {
+		http.Error(w, "Invalid file path", http.StatusBadRequest)
+		return
+	}
+
+	query := `
+		SELECT id, project_id, file_path, start_line, end_line, body, snippet, author_id, author_email, created, updated
+		FROM comments
+		WHERE project_id = ?`
+	args := []any{projectID}
+	if filePath != "" {
+		query += " AND file_path = ?"
+		args = append(args, filePath)
+	}
+	query += " ORDER BY created ASC, id ASC"
+
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		http.Error(w, "Failed to load comments", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	comments := make([]Comment, 0)
+	for rows.Next() {
+		var comment Comment
+		if err := rows.Scan(
+			&comment.ID, &comment.ProjectID, &comment.FilePath, &comment.StartLine, &comment.EndLine,
+			&comment.Body, &comment.Snippet, &comment.AuthorID, &comment.AuthorEmail, &comment.Created, &comment.Updated,
+		); err != nil {
+			http.Error(w, "Failed to load comments", http.StatusInternalServerError)
+			return
+		}
+		comment.CanDelete = comment.AuthorID == user.ID
+		comments = append(comments, comment)
+	}
+	if err := rows.Err(); err != nil {
+		http.Error(w, "Failed to load comments", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(comments)
+}
+
+func (s *Server) handleCreateComment(w http.ResponseWriter, r *http.Request) {
+	user := getUserFromContext(r.Context())
+	access, ok := s.requireProjectAccess(w, r, projectAccessRead)
+	if !ok {
+		return
+	}
+	if !canCommentOnProject(access) {
+		http.Error(w, "Forbidden", http.StatusForbidden)
+		return
+	}
+	projectID := access.ProjectID
+
+	filePath, err := normalizeProjectPath(r.FormValue("filePath"), false)
+	if err != nil {
+		http.Error(w, "Invalid file path", http.StatusBadRequest)
+		return
+	}
+
+	projectDir := filepath.Join(s.projectsDir, projectID)
+	_, absFilePath, err := resolveProjectPath(projectDir, filePath, false)
+	if err != nil {
+		http.Error(w, "Invalid file path", http.StatusBadRequest)
+		return
+	}
+
+	fileInfo, err := os.Stat(absFilePath)
+	if os.IsNotExist(err) {
+		http.Error(w, "File not found", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		http.Error(w, "Failed to access file", http.StatusInternalServerError)
+		return
+	}
+	if fileInfo.IsDir() || !isTextFile(filePath) {
+		http.Error(w, "Comments are only supported on text files", http.StatusBadRequest)
+		return
+	}
+
+	startLine, err := parseLineValue(r.FormValue("startLine"))
+	if err != nil {
+		http.Error(w, "Invalid start line", http.StatusBadRequest)
+		return
+	}
+	endLine, err := parseLineValue(r.FormValue("endLine"))
+	if err != nil {
+		http.Error(w, "Invalid end line", http.StatusBadRequest)
+		return
+	}
+	if endLine < startLine {
+		http.Error(w, "Invalid line range", http.StatusBadRequest)
+		return
+	}
+
+	body := strings.TrimSpace(r.FormValue("body"))
+	if body == "" {
+		http.Error(w, "Comment body is required", http.StatusBadRequest)
+		return
+	}
+	if len(body) > 2000 {
+		http.Error(w, "Comment is too long", http.StatusBadRequest)
+		return
+	}
+
+	snippet := strings.TrimSpace(r.FormValue("snippet"))
+	if len(snippet) > 500 {
+		snippet = snippet[:500]
+	}
+
+	commentID := uuid.New().String()
+	_, err = s.db.Exec(
+		`INSERT INTO comments
+		(id, project_id, file_path, start_line, end_line, body, snippet, author_id, author_email)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		commentID, projectID, filePath, startLine, endLine, body, snippet, user.ID, user.Email,
+	)
+	if err != nil {
+		http.Error(w, "Failed to create comment", http.StatusInternalServerError)
+		return
+	}
+
+	comment := Comment{
+		ID:          commentID,
+		ProjectID:   projectID,
+		FilePath:    filePath,
+		StartLine:   startLine,
+		EndLine:     endLine,
+		Body:        body,
+		Snippet:     snippet,
+		AuthorID:    user.ID,
+		AuthorEmail: user.Email,
+		CanDelete:   true,
+	}
+
+	s.db.QueryRow("SELECT created, updated FROM comments WHERE id = ?", commentID).Scan(&comment.Created, &comment.Updated)
+	s.touchProject(projectID)
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(comment)
+}
+
+func (s *Server) handleDeleteComment(w http.ResponseWriter, r *http.Request) {
+	user := getUserFromContext(r.Context())
+	access, ok := s.requireProjectAccess(w, r, projectAccessRead)
+	if !ok {
+		return
+	}
+	projectID := access.ProjectID
+
+	commentID := strings.TrimSpace(chi.URLParam(r, "commentID"))
+	if commentID == "" {
+		http.Error(w, "Comment not found", http.StatusNotFound)
+		return
+	}
+
+	result, err := s.db.Exec(
+		"DELETE FROM comments WHERE id = ? AND project_id = ? AND author_id = ?",
+		commentID, projectID, user.ID,
+	)
+	if err != nil {
+		http.Error(w, "Failed to delete comment", http.StatusInternalServerError)
+		return
+	}
+
+	affected, _ := result.RowsAffected()
+	if affected == 0 {
+		http.Error(w, "Comment not found", http.StatusNotFound)
+		return
+	}
+
+	s.touchProject(projectID)
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) handleListFiles(w http.ResponseWriter, r *http.Request) {
@@ -1238,6 +1480,7 @@ func (s *Server) handleDeleteFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	s.deleteCommentsForPath(projectID, filename)
 	s.touchProject(projectID)
 	w.WriteHeader(http.StatusOK)
 }
@@ -1323,6 +1566,7 @@ func (s *Server) handleMoveFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	s.moveCommentsForPath(projectID, sourceRel, targetRel)
 	s.touchProject(projectID)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"path": targetRel})

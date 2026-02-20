@@ -33,6 +33,13 @@
         .monaco-editor .source-line-highlight {
             background: rgba(37, 99, 235, 0.2);
         }
+        .monaco-editor .comment-line-highlight {
+            background: rgba(245, 158, 11, 0.2);
+        }
+        .monaco-editor .comment-line-decoration {
+            border-left: 3px solid rgba(245, 158, 11, 0.95);
+            margin-left: 2px;
+        }
     </style>
 </head>
 <body class="bg-gray-100">
@@ -149,6 +156,30 @@
             </div>
             <div id="pdf-compile-stat" class="hidden pointer-events-none absolute bottom-3 right-3 rounded bg-black/70 px-2 py-1 text-xs text-white">Compile: --</div>
         </div>
+
+        <div id="comments-container" class="w-80 bg-white border-l border-gray-300 flex flex-col">
+            <div class="border-b border-gray-200 p-3 space-y-3">
+                <div class="flex items-center justify-between">
+                    <h3 class="text-sm font-semibold text-gray-800">Comments</h3>
+                    <label class="flex items-center gap-1 text-[11px] text-gray-600">
+                        <input id="comment-scope-all" type="checkbox" class="h-3 w-3">
+                        All files
+                    </label>
+                </div>
+                <div class="space-y-1">
+                    <div id="comment-target" class="text-xs text-gray-600 truncate">Target: main.tex:1</div>
+                    <button id="comment-use-selection-btn" class="w-full rounded border border-gray-300 bg-gray-50 px-2 py-1 text-xs text-gray-700 hover:bg-gray-100">
+                        Use Current Selection
+                    </button>
+                </div>
+                <textarea id="comment-input" rows="3" placeholder="Add feedback for this part..."
+                    class="w-full rounded border border-gray-300 px-2 py-1 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"></textarea>
+                <button id="comment-add-btn" class="w-full rounded bg-amber-500 px-3 py-2 text-sm font-medium text-white hover:bg-amber-600">
+                    Add Comment
+                </button>
+            </div>
+            <div id="comment-list" class="flex-1 overflow-auto p-3 space-y-2"></div>
+        </div>
     </div>
 
     <div id="error-panel" class="hidden bg-red-900 text-red-100 p-4 max-h-48 overflow-auto">
@@ -180,12 +211,14 @@
 
     const projectId = '{{.Project.ID}}';
     const canWrite = {{if .CanWrite}}true{{else}}false{{end}};
+    const canComment = {{if .CanComment}}true{{else}}false{{end}};
     const canManageMembers = {{if .CanManageMembers}}true{{else}}false{{end}};
     const initialStatusMessage = {{printf "%q" .Status}};
     const initialErrorMessage = {{printf "%q" .Error}};
     const initialContent = {{.Content}};
     const MIN_PDF_ZOOM = 0.4;
     const MAX_PDF_ZOOM = 3;
+    const MAX_COMMENT_BODY_LENGTH = 2000;
     let editor;
     let currentFile = 'main.tex';
     let currentFileIsText = true;
@@ -206,9 +239,12 @@
     let activePDFPage = null;
     let lineHighlightDecorations = [];
     let lineHighlightTimer = null;
+    let commentDecorations = [];
     let suppressEditorPDFSync = false;
     let suppressEditorChangeTracking = false;
     let pdfResizeTimer = null;
+    let comments = [];
+    let commentTarget = { filePath: 'main.tex', startLine: 1, endLine: 1, snippet: '' };
 
     fileContents['main.tex'] = initialContent;
 
@@ -248,6 +284,7 @@
             language: 'latex',
             theme: 'vs-dark',
             fontSize: 14,
+            glyphMargin: true,
             minimap: { enabled: false },
             wordWrap: 'on',
             automaticLayout: true,
@@ -273,6 +310,13 @@
             showLineInPDF(e.position.lineNumber);
         });
 
+        editor.onDidChangeCursorSelection(() => {
+            if (!currentFileIsText || !canComment) {
+                return;
+            }
+            updateCommentTargetFromEditor(false);
+        });
+
         if (canWrite) {
             editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, function () {
                 save();
@@ -288,6 +332,8 @@
         });
 
         loadFileList();
+        loadComments();
+        updateCommentTargetFromEditor(true);
     });
 
     function buildFileURL(filename) {
@@ -536,6 +582,7 @@
 
             remapPathState(sourcePath, nextPath);
             await loadFileList();
+            await loadComments();
 
             if (!filesByPath[currentFile] || filesByPath[currentFile].isDir) {
                 if (filesByPath['main.tex']) {
@@ -688,13 +735,18 @@
     async function openFile(filename) {
         const file = filesByPath[filename];
         if (!file || file.isDir) return;
-        if (filename === currentFile && file.isText === currentFileIsText) return;
+        if (filename === currentFile && file.isText === currentFileIsText) {
+            renderCommentList();
+            renderCommentDecorations();
+            return;
+        }
 
         currentFile = filename;
         currentFileIsText = file.isText;
         ensureFolderExpanded(getParentPath(filename));
         document.getElementById('current-file').textContent = filename;
         updateFileList();
+        renderCommentList();
 
         if (file.isText) {
             await openTextFile(filename);
@@ -723,11 +775,16 @@
         suppressEditorChangeTracking = false;
         editor.layout();
         editor.focus();
+        updateCommentTargetFromEditor(true);
+        renderCommentDecorations();
+        renderCommentList();
     }
 
     async function openBinaryFile(filename, hintedContentType = '') {
         showPreview();
         setSaveEnabled(false);
+        updateCommentTargetLabel();
+        renderCommentDecorations();
 
         const preview = document.getElementById('file-preview');
         preview.innerHTML = '<div class="h-full flex items-center justify-center text-gray-500">Loading preview...</div>';
@@ -776,6 +833,368 @@
             saveBtn.disabled = true;
             saveBtn.className = 'bg-gray-200 text-gray-400 py-2 px-4 rounded cursor-not-allowed';
         }
+    }
+
+    function buildCommentTargetLabel(target) {
+        if (!target || !target.filePath) {
+            return 'Target: -';
+        }
+        const rangeLabel = target.startLine === target.endLine
+            ? `${target.startLine}`
+            : `${target.startLine}-${target.endLine}`;
+        return `Target: ${target.filePath}:${rangeLabel}`;
+    }
+
+    function updateCommentTargetLabel() {
+        const addBtn = document.getElementById('comment-add-btn');
+        const selectionBtn = document.getElementById('comment-use-selection-btn');
+        const input = document.getElementById('comment-input');
+        const disabled = !canComment || !currentFileIsText;
+        addBtn.disabled = disabled;
+        selectionBtn.disabled = disabled;
+        input.disabled = disabled;
+        addBtn.className = disabled
+            ? 'w-full rounded bg-gray-300 px-3 py-2 text-sm font-medium text-gray-500 cursor-not-allowed'
+            : 'w-full rounded bg-amber-500 px-3 py-2 text-sm font-medium text-white hover:bg-amber-600';
+        selectionBtn.className = disabled
+            ? 'w-full rounded border border-gray-200 bg-gray-100 px-2 py-1 text-xs text-gray-400 cursor-not-allowed'
+            : 'w-full rounded border border-gray-300 bg-gray-50 px-2 py-1 text-xs text-gray-700 hover:bg-gray-100';
+
+        const label = document.getElementById('comment-target');
+        if (!canComment) {
+            label.textContent = 'Target: your role cannot create comments';
+            return;
+        }
+        if (!currentFileIsText) {
+            label.textContent = 'Target: open a text file to comment';
+            return;
+        }
+        label.textContent = buildCommentTargetLabel(commentTarget);
+    }
+
+    function clampLineValue(lineValue, min, max) {
+        if (!Number.isFinite(lineValue)) {
+            return min;
+        }
+        return Math.min(max, Math.max(min, lineValue));
+    }
+
+    function buildCommentSnippet(startLine, endLine) {
+        const model = editor ? editor.getModel() : null;
+        if (!model) {
+            return '';
+        }
+
+        const lineCount = model.getLineCount();
+        const safeStart = clampLineValue(startLine, 1, lineCount);
+        const safeEnd = clampLineValue(endLine, safeStart, lineCount);
+        const maxLines = Math.min(4, safeEnd - safeStart + 1);
+        const parts = [];
+        for (let offset = 0; offset < maxLines; offset++) {
+            const line = model.getLineContent(safeStart + offset).trim();
+            if (line) {
+                parts.push(line);
+            }
+        }
+
+        const snippet = parts.join(' ').replace(/\s+/g, ' ').trim();
+        if (snippet.length <= 220) {
+            return snippet;
+        }
+        return `${snippet.slice(0, 220)}...`;
+    }
+
+    function getCommentTargetFromEditor() {
+        if (!editor || !currentFileIsText) {
+            return null;
+        }
+
+        const model = editor.getModel();
+        if (!model) {
+            return null;
+        }
+
+        const lineCount = Math.max(1, model.getLineCount());
+        const selection = editor.getSelection();
+        const position = editor.getPosition();
+        let startLine = position ? position.lineNumber : 1;
+        let endLine = startLine;
+
+        if (selection) {
+            startLine = selection.startLineNumber;
+            endLine = selection.endLineNumber;
+            if (!selection.isEmpty() && selection.endColumn === 1 && endLine > startLine) {
+                endLine -= 1;
+            }
+        }
+
+        const safeStart = clampLineValue(startLine, 1, lineCount);
+        const safeEnd = clampLineValue(endLine, safeStart, lineCount);
+        return {
+            filePath: currentFile,
+            startLine: safeStart,
+            endLine: safeEnd,
+            snippet: buildCommentSnippet(safeStart, safeEnd),
+        };
+    }
+
+    function updateCommentTargetFromEditor(fallbackToCurrentLine = false) {
+        const target = getCommentTargetFromEditor();
+        if (!target) {
+            if (fallbackToCurrentLine) {
+                commentTarget = { filePath: currentFile, startLine: 1, endLine: 1, snippet: '' };
+                updateCommentTargetLabel();
+            }
+            return;
+        }
+        commentTarget = target;
+        updateCommentTargetLabel();
+    }
+
+    function formatCommentCreatedAt(value) {
+        if (!value) {
+            return '';
+        }
+        const iso = value.replace(' ', 'T') + 'Z';
+        const parsed = new Date(iso);
+        if (Number.isNaN(parsed.getTime())) {
+            return value;
+        }
+        return parsed.toLocaleString();
+    }
+
+    function currentCommentScopeIsAllFiles() {
+        return document.getElementById('comment-scope-all').checked;
+    }
+
+    function visibleComments() {
+        if (currentCommentScopeIsAllFiles()) {
+            return comments;
+        }
+        return comments.filter(comment => comment.filePath === currentFile);
+    }
+
+    function renderCommentList() {
+        const list = document.getElementById('comment-list');
+        list.innerHTML = '';
+
+        const items = visibleComments();
+        if (!items.length) {
+            const empty = document.createElement('div');
+            empty.className = 'rounded border border-dashed border-gray-300 px-3 py-2 text-xs text-gray-500';
+            empty.textContent = currentCommentScopeIsAllFiles()
+                ? 'No comments in this project yet.'
+                : `No comments for ${currentFile}.`;
+            list.appendChild(empty);
+            return;
+        }
+
+        items.forEach(comment => {
+            const card = document.createElement('div');
+            card.className = 'rounded border border-amber-200 bg-amber-50 p-2 space-y-2';
+
+            const topRow = document.createElement('div');
+            topRow.className = 'flex items-start justify-between gap-2';
+
+            const meta = document.createElement('div');
+            meta.className = 'text-[11px] text-amber-900';
+            const rangeLabel = comment.startLine === comment.endLine
+                ? `${comment.filePath}:${comment.startLine}`
+                : `${comment.filePath}:${comment.startLine}-${comment.endLine}`;
+            meta.textContent = `${comment.authorEmail} • ${rangeLabel}`;
+            topRow.appendChild(meta);
+
+            const actions = document.createElement('div');
+            actions.className = 'flex items-center gap-1';
+
+            const jumpBtn = document.createElement('button');
+            jumpBtn.type = 'button';
+            jumpBtn.className = 'rounded border border-amber-300 bg-white px-1.5 py-0.5 text-[11px] text-amber-800 hover:bg-amber-100';
+            jumpBtn.textContent = 'Jump';
+            jumpBtn.onclick = () => jumpToComment(comment);
+            actions.appendChild(jumpBtn);
+
+            if (comment.canDelete) {
+                const deleteBtn = document.createElement('button');
+                deleteBtn.type = 'button';
+                deleteBtn.className = 'rounded border border-red-300 bg-white px-1.5 py-0.5 text-[11px] text-red-700 hover:bg-red-50';
+                deleteBtn.textContent = 'Delete';
+                deleteBtn.onclick = () => deleteComment(comment.id);
+                actions.appendChild(deleteBtn);
+            }
+
+            topRow.appendChild(actions);
+            card.appendChild(topRow);
+
+            const body = document.createElement('p');
+            body.className = 'text-sm text-gray-800 whitespace-pre-wrap break-words';
+            body.textContent = comment.body;
+            card.appendChild(body);
+
+            if (comment.snippet) {
+                const snippet = document.createElement('p');
+                snippet.className = 'rounded border border-amber-200 bg-white px-2 py-1 text-xs italic text-gray-600';
+                snippet.textContent = `"${comment.snippet}"`;
+                card.appendChild(snippet);
+            }
+
+            const created = document.createElement('div');
+            created.className = 'text-[11px] text-gray-500';
+            created.textContent = formatCommentCreatedAt(comment.created);
+            card.appendChild(created);
+
+            list.appendChild(card);
+        });
+    }
+
+    function escapeForHover(value) {
+        return String(value || '')
+            .replace(/\\/g, '\\\\')
+            .replace(/\|/g, '\\|');
+    }
+
+    function renderCommentDecorations() {
+        if (!editor || !currentFileIsText) {
+            if (editor) {
+                commentDecorations = editor.deltaDecorations(commentDecorations, []);
+            }
+            return;
+        }
+
+        const model = editor.getModel();
+        if (!model) {
+            return;
+        }
+
+        const lineCount = Math.max(1, model.getLineCount());
+        const currentFileComments = comments.filter(comment => comment.filePath === currentFile);
+        const nextDecorations = currentFileComments.map(comment => {
+            const startLine = clampLineValue(comment.startLine, 1, lineCount);
+            const endLine = clampLineValue(comment.endLine, startLine, lineCount);
+            const hoverParts = [
+                `${comment.authorEmail}`,
+                `${comment.startLine === comment.endLine ? comment.startLine : `${comment.startLine}-${comment.endLine}`}`,
+            ];
+            const hoverBody = escapeForHover(comment.body);
+            return {
+                range: new monaco.Range(startLine, 1, endLine, 1),
+                options: {
+                    isWholeLine: true,
+                    className: 'comment-line-highlight',
+                    linesDecorationsClassName: 'comment-line-decoration',
+                    hoverMessage: [{ value: `${hoverParts.join(' • ')}\n\n${hoverBody}` }],
+                },
+            };
+        });
+
+        commentDecorations = editor.deltaDecorations(commentDecorations, nextDecorations);
+    }
+
+    async function loadComments() {
+        try {
+            const response = await fetch(`/api/projects/${projectId}/comments`);
+            if (!response.ok) {
+                setStatus('Failed to load comments', true);
+                return;
+            }
+            comments = await response.json();
+            renderCommentList();
+            renderCommentDecorations();
+        } catch (_) {
+            setStatus('Failed to load comments', true);
+        }
+    }
+
+    async function addComment() {
+        if (!canComment) {
+            setStatus('Your role cannot create comments', true);
+            return;
+        }
+
+        if (!currentFileIsText) {
+            setStatus('Open a text file to add comments', true);
+            return;
+        }
+
+        updateCommentTargetFromEditor(true);
+        const bodyInput = document.getElementById('comment-input');
+        const body = bodyInput.value.trim();
+        if (!body) {
+            setStatus('Comment cannot be empty', true);
+            return;
+        }
+        if (body.length > MAX_COMMENT_BODY_LENGTH) {
+            setStatus(`Comment too long (max ${MAX_COMMENT_BODY_LENGTH} chars)`, true);
+            return;
+        }
+
+        const payload = new URLSearchParams({
+            filePath: commentTarget.filePath,
+            startLine: String(commentTarget.startLine),
+            endLine: String(commentTarget.endLine),
+            body,
+            snippet: commentTarget.snippet || '',
+        });
+
+        try {
+            const response = await fetch(`/api/projects/${projectId}/comments`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: payload.toString(),
+            });
+            if (!response.ok) {
+                const message = await response.text();
+                setStatus(message || 'Failed to add comment', true);
+                return;
+            }
+
+            bodyInput.value = '';
+            await loadComments();
+            setStatus(`Comment added at ${commentTarget.filePath}:${commentTarget.startLine}`);
+        } catch (_) {
+            setStatus('Failed to add comment', true);
+        }
+    }
+
+    async function deleteComment(commentID) {
+        if (!confirm('Delete this comment?')) {
+            return;
+        }
+
+        try {
+            const response = await fetch(`/api/projects/${projectId}/comments/${encodeURIComponent(commentID)}`, {
+                method: 'DELETE',
+            });
+            if (!response.ok) {
+                setStatus('Failed to delete comment', true);
+                return;
+            }
+            await loadComments();
+            setStatus('Comment deleted');
+        } catch (_) {
+            setStatus('Failed to delete comment', true);
+        }
+    }
+
+    async function jumpToComment(comment) {
+        await openFile(comment.filePath);
+        if (!currentFileIsText || !editor) {
+            return;
+        }
+
+        const model = editor.getModel();
+        if (!model) {
+            return;
+        }
+
+        const maxLine = model.getLineCount();
+        const startLine = clampLineValue(comment.startLine, 1, maxLine);
+        const endLine = clampLineValue(comment.endLine, startLine, maxLine);
+        editor.revealLineInCenter(startLine);
+        editor.setSelection(new monaco.Range(startLine, 1, endLine, model.getLineMaxColumn(endLine)));
+        editor.focus();
+        highlightEditorRange(startLine, endLine);
+        setStatus(`Jumped to ${comment.filePath}:${comment.startLine}`);
     }
 
     function clearFilePreview() {
@@ -1060,6 +1479,7 @@
 
             const deletedCurrent = currentFile === filename || currentFile.startsWith(pathPrefix);
             await loadFileList();
+            await loadComments();
 
             if (deletedCurrent && filesByPath['main.tex']) {
                 await openFile('main.tex');
@@ -1428,10 +1848,18 @@
         }
     }
 
-    function highlightEditorLine(lineNumber) {
+    function highlightEditorRange(startLine, endLine = startLine) {
+        const model = editor ? editor.getModel() : null;
+        if (!model) {
+            return;
+        }
+        const lineCount = model.getLineCount();
+        const safeStart = clampLineValue(startLine, 1, lineCount);
+        const safeEnd = clampLineValue(endLine, safeStart, lineCount);
+
         lineHighlightDecorations = editor.deltaDecorations(lineHighlightDecorations, [
             {
-                range: new monaco.Range(lineNumber, 1, lineNumber, 1),
+                range: new monaco.Range(safeStart, 1, safeEnd, 1),
                 options: {
                     isWholeLine: true,
                     className: 'source-line-highlight',
@@ -1445,6 +1873,10 @@
         lineHighlightTimer = setTimeout(() => {
             lineHighlightDecorations = editor.deltaDecorations(lineHighlightDecorations, []);
         }, 1200);
+    }
+
+    function highlightEditorLine(lineNumber) {
+        highlightEditorRange(lineNumber, lineNumber);
     }
 
     function showLineInPDF(lineNumber, withMessage = false) {
@@ -1622,6 +2054,16 @@
     document.getElementById('compile-btn').addEventListener('click', compile);
     applyWritePermissions();
     setSaveEnabled(canWrite);
+    document.getElementById('comment-scope-all').addEventListener('change', renderCommentList);
+    document.getElementById('comment-use-selection-btn').addEventListener('click', () => updateCommentTargetFromEditor(true));
+    document.getElementById('comment-add-btn').addEventListener('click', addComment);
+    document.getElementById('comment-input').addEventListener('keydown', (event) => {
+        if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+            event.preventDefault();
+            addComment();
+        }
+    });
+    updateCommentTargetLabel();
     updateZoomLabel();
     updateCompileStat();
 </script>

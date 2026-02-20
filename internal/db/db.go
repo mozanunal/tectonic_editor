@@ -44,22 +44,42 @@ func migrate(db *sql.DB) error {
 		FOREIGN KEY (user_id) REFERENCES users(id)
 	) STRICT;
 
-	CREATE INDEX IF NOT EXISTS idx_projects_user_id ON projects(user_id);
-
-	CREATE TABLE IF NOT EXISTS project_members (
+	CREATE TABLE IF NOT EXISTS comments (
+		id TEXT PRIMARY KEY,
 		project_id TEXT NOT NULL,
-		user_id TEXT NOT NULL,
+		file_path TEXT NOT NULL,
+		start_line INTEGER NOT NULL,
+		end_line INTEGER NOT NULL,
+		body TEXT NOT NULL,
+		snippet TEXT NOT NULL DEFAULT '',
+		author_id TEXT NOT NULL,
+		author_email TEXT NOT NULL,
+		created TEXT DEFAULT (datetime('now')),
+		updated TEXT DEFAULT (datetime('now')),
+		FOREIGN KEY (project_id) REFERENCES projects(id),
+		FOREIGN KEY (author_id) REFERENCES users(id),
+		CHECK (start_line >= 1),
+		CHECK (end_line >= start_line)
+		) STRICT;
+
+		CREATE INDEX IF NOT EXISTS idx_projects_user_id ON projects(user_id);
+
+		CREATE TABLE IF NOT EXISTS project_members (
+			project_id TEXT NOT NULL,
+			user_id TEXT NOT NULL,
 		role TEXT NOT NULL CHECK (role IN ('reader', 'commenter', 'writer')),
 		created TEXT DEFAULT (datetime('now')),
 		updated TEXT DEFAULT (datetime('now')),
 		PRIMARY KEY (project_id, user_id),
 		FOREIGN KEY (project_id) REFERENCES projects(id),
 		FOREIGN KEY (user_id) REFERENCES users(id)
-	) STRICT;
+		) STRICT;
 
-	CREATE INDEX IF NOT EXISTS idx_project_members_user_id ON project_members(user_id);
-	CREATE INDEX IF NOT EXISTS idx_project_members_project_id ON project_members(project_id);
-	`
+		CREATE INDEX IF NOT EXISTS idx_project_members_user_id ON project_members(user_id);
+		CREATE INDEX IF NOT EXISTS idx_project_members_project_id ON project_members(project_id);
+		CREATE INDEX IF NOT EXISTS idx_comments_project_file ON comments(project_id, file_path, start_line);
+		CREATE INDEX IF NOT EXISTS idx_comments_project_created ON comments(project_id, created);
+		`
 
 	if _, err := db.Exec(schema); err != nil {
 		return err

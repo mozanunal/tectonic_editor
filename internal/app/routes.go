@@ -46,6 +46,9 @@ func (s *Server) setupRoutes() http.Handler {
 		r.Get("/api/projects/{id}/files/*", s.handleGetFile)
 		r.Put("/api/projects/{id}/files/*", s.handleUpdateFile)
 		r.Delete("/api/projects/{id}/files/*", s.handleDeleteFile)
+		r.Get("/api/projects/{id}/comments", s.handleListComments)
+		r.Post("/api/projects/{id}/comments", s.handleCreateComment)
+		r.Delete("/api/projects/{id}/comments/{commentID}", s.handleDeleteComment)
 	})
 
 	return r
