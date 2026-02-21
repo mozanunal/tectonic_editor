@@ -852,7 +852,7 @@ var compilerArtifacts = map[string]struct{}{
 
 func isCompilableSource(name string) bool {
 	switch strings.ToLower(filepath.Ext(name)) {
-	case ".tex", ".typ":
+	case ".tex", ".typ", ".md":
 		return true
 	default:
 		return false
@@ -860,7 +860,7 @@ func isCompilableSource(name string) bool {
 }
 
 func defaultCompileEntry(projectDir string) (string, error) {
-	primaryCandidates := []string{"main.tex", "main.typ"}
+	primaryCandidates := []string{"main.tex", "main.typ", "main.md", "README.md"}
 	for _, candidate := range primaryCandidates {
 		_, absPath, err := resolveProjectPath(projectDir, candidate, false)
 		if err != nil {
@@ -910,7 +910,7 @@ func defaultCompileEntry(projectDir string) (string, error) {
 	}
 
 	if len(candidates) == 0 {
-		return "", errors.New("No .tex or .typ entry file found")
+		return "", errors.New("No .tex, .typ, or .md entry file found")
 	}
 
 	sort.Strings(candidates)
@@ -1759,33 +1759,54 @@ func (s *Server) handleMoveFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	targetDirRel, targetDirPath, err := resolveProjectPath(projectDir, r.FormValue("targetDir"), true)
-	if err != nil {
-		http.Error(w, "Invalid target path", http.StatusBadRequest)
-		return
-	}
-	if targetDirRel != "" {
-		targetInfo, err := os.Stat(targetDirPath)
-		if os.IsNotExist(err) {
-			http.Error(w, "Target directory not found", http.StatusBadRequest)
-			return
-		}
+	var targetRel string
+	if target := r.FormValue("target"); target != "" {
+		var targetPath string
+		targetRel, targetPath, err = resolveProjectPath(projectDir, target, false)
 		if err != nil {
-			http.Error(w, "Failed to access target path", http.StatusInternalServerError)
+			http.Error(w, "Invalid target path", http.StatusBadRequest)
 			return
 		}
-		if !targetInfo.IsDir() {
-			http.Error(w, "Target must be a directory", http.StatusBadRequest)
+		targetParent := filepath.Dir(targetPath)
+		if targetParent != projectDir {
+			if info, statErr := os.Stat(targetParent); statErr != nil || !info.IsDir() {
+				http.Error(w, "Target parent directory not found", http.StatusBadRequest)
+				return
+			}
+		}
+		if sourceInfo.IsDir() && strings.HasPrefix(targetRel+"/", sourceRel+"/") {
+			http.Error(w, "Cannot move a directory into itself", http.StatusBadRequest)
 			return
 		}
-	}
+	} else {
+		targetDirRel, targetDirPath, err := resolveProjectPath(projectDir, r.FormValue("targetDir"), true)
+		if err != nil {
+			http.Error(w, "Invalid target path", http.StatusBadRequest)
+			return
+		}
+		if targetDirRel != "" {
+			targetInfo, err := os.Stat(targetDirPath)
+			if os.IsNotExist(err) {
+				http.Error(w, "Target directory not found", http.StatusBadRequest)
+				return
+			}
+			if err != nil {
+				http.Error(w, "Failed to access target path", http.StatusInternalServerError)
+				return
+			}
+			if !targetInfo.IsDir() {
+				http.Error(w, "Target must be a directory", http.StatusBadRequest)
+				return
+			}
+		}
 
-	if sourceInfo.IsDir() && (targetDirRel == sourceRel || strings.HasPrefix(targetDirRel+"/", sourceRel+"/")) {
-		http.Error(w, "Cannot move a directory into itself", http.StatusBadRequest)
-		return
-	}
+		if sourceInfo.IsDir() && (targetDirRel == sourceRel || strings.HasPrefix(targetDirRel+"/", sourceRel+"/")) {
+			http.Error(w, "Cannot move a directory into itself", http.StatusBadRequest)
+			return
+		}
 
-	targetRel := path.Join(targetDirRel, path.Base(sourceRel))
+		targetRel = path.Join(targetDirRel, path.Base(sourceRel))
+	}
 	if targetRel == sourceRel {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{"path": targetRel})

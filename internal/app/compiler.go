@@ -1,6 +1,8 @@
 package app
 
 import (
+	"crypto/md5"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"os/exec"
@@ -40,17 +42,38 @@ func (c *Compiler) Compile(workDir string, entryFile string) ([]byte, string, er
 	pdfFile := strings.TrimSuffix(entryFile, filepath.Ext(entryFile)) + ".pdf"
 
 	var cmd *exec.Cmd
+	var wrapperFile string
+
 	switch ext {
 	case ".tex":
 		cmd = exec.Command(c.tectonicBin, "-X", "compile", entryFile)
 	case ".typ":
 		cmd = exec.Command(c.typstBin, "compile", entryFile, pdfFile)
+	case ".md":
+		hash := md5.Sum([]byte(entryFile))
+		wrapperName := ".md-wrapper-" + hex.EncodeToString(hash[:8]) + ".typ"
+		wrapperFile = filepath.Join(workDir, wrapperName)
+
+		wrapperContent := fmt.Sprintf(`#import "@preview/cmarker:0.1.8"
+#cmarker.render(read("%s"))
+`, entryFile)
+
+		if err := os.WriteFile(wrapperFile, []byte(wrapperContent), 0644); err != nil {
+			return nil, "", fmt.Errorf("failed to create markdown wrapper: %w", err)
+		}
+
+		pdfFile = strings.TrimSuffix(entryFile, filepath.Ext(entryFile)) + ".pdf"
+		cmd = exec.Command(c.typstBin, "compile", wrapperName, pdfFile)
 	default:
 		return nil, "", fmt.Errorf("unsupported entry file: %s", entryFile)
 	}
 
 	cmd.Dir = workDir
 	output, err := cmd.CombinedOutput()
+
+	if wrapperFile != "" {
+		_ = os.Remove(wrapperFile)
+	}
 
 	if err != nil {
 		if len(output) == 0 {

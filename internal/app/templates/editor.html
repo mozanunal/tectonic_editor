@@ -72,62 +72,72 @@
 </head>
 <body class="bg-gray-100">
 <div class="h-screen flex flex-col">
-    <nav class="bg-white shadow h-16 flex-shrink-0 z-10">
+    <nav class="bg-white shadow h-12 flex-shrink-0 z-10">
         <div class="h-full px-4 flex justify-between items-center">
-            <div class="flex items-center gap-4">
-                <a href="/" class="inline-flex items-center gap-2 text-gray-600 hover:text-gray-800" aria-label="Back to projects">
+            <div class="flex items-center gap-3">
+                <a href="/" class="inline-flex items-center gap-1.5 text-gray-500 hover:text-gray-700" aria-label="Back to projects">
                     <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
                         <path fill-rule="evenodd" d="M17 10a.75.75 0 0 1-.75.75H5.56l3.22 3.22a.75.75 0 1 1-1.06 1.06l-4.5-4.5a.75.75 0 0 1 0-1.06l4.5-4.5a.75.75 0 0 1 1.06 1.06l-3.22 3.22h10.69A.75.75 0 0 1 17 10Z" clip-rule="evenodd" />
                     </svg>
-                    <span>Projects</span>
+                    <span class="text-sm">Projects</span>
                 </a>
-                <span class="font-semibold text-gray-800">{{.Project.Name}}</span>
+                <span class="text-gray-300">/</span>
+                <span class="font-medium text-gray-800 text-sm">{{.Project.Name}}</span>
+                <span class="text-gray-300">/</span>
                 <span id="current-file" class="text-sm text-gray-500">main.tex</span>
             </div>
-            <div class="flex items-center gap-2">
-                <span id="status" class="text-sm text-gray-500"></span>
-                <div class="flex items-center rounded border border-gray-300 bg-white p-0.5">
+            <div class="flex items-center gap-3">
+                <span id="status" class="text-xs text-gray-500"></span>
+                {{if not .CanWrite}}
+                <span class="rounded bg-amber-100 px-2 py-0.5 text-xs text-amber-700">Read-only</span>
+                {{end}}
+                <div class="flex items-center rounded-md border border-gray-200 bg-gray-50 p-0.5">
                     <button id="view-editor-btn" type="button"
-                        class="rounded px-2 py-1 text-xs text-gray-600 hover:bg-gray-100" aria-pressed="false">
+                        class="rounded px-2.5 py-1 text-xs text-gray-600 hover:bg-white hover:shadow-sm transition" aria-pressed="false">
                         Editor
                     </button>
-                    <button id="view-pdf-btn" type="button"
-                        class="rounded px-2 py-1 text-xs text-gray-600 hover:bg-gray-100" aria-pressed="false">
-                        PDF
-                    </button>
                     <button id="view-split-btn" type="button"
-                        class="rounded bg-blue-600 px-2 py-1 text-xs font-medium text-white" aria-pressed="true">
+                        class="rounded bg-white shadow-sm px-2.5 py-1 text-xs font-medium text-gray-800" aria-pressed="true">
                         Split
                     </button>
+                    <button id="view-pdf-btn" type="button"
+                        class="rounded px-2.5 py-1 text-xs text-gray-600 hover:bg-white hover:shadow-sm transition" aria-pressed="false">
+                        PDF
+                    </button>
                 </div>
-                {{if not .CanWrite}}
-                <span class="rounded bg-amber-100 px-2 py-1 text-xs text-amber-700">Read-only</span>
-                {{end}}
-                <button id="show-in-pdf-btn"
-                    class="bg-gray-100 text-gray-700 py-2 px-4 rounded hover:bg-gray-200 transition">
-                    Show in PDF
+                <button id="save-btn" type="button"
+                    class="p-1.5 rounded text-gray-500 hover:text-gray-700 hover:bg-gray-100 transition" title="Save (⌘S)">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>
+                        <polyline points="17 21 17 13 7 13 7 21"></polyline>
+                        <polyline points="7 3 7 8 15 8"></polyline>
+                    </svg>
                 </button>
-                <button id="download-source-btn"
-                    class="bg-gray-100 text-gray-700 py-2 px-4 rounded hover:bg-gray-200 transition">
-                    Download Source
-                </button>
-                <button id="download-pdf-btn"
-                    class="bg-gray-100 text-gray-700 py-2 px-4 rounded hover:bg-gray-200 transition">
-                    Download PDF
-                </button>
-                <button id="save-btn"
-                    class="bg-gray-100 text-gray-700 py-2 px-4 rounded hover:bg-gray-200 transition">
-                    Save
-                </button>
-                <div class="flex items-center gap-2">
-                    <label for="compile-target" class="text-xs text-gray-500">Entry</label>
-                    <select id="compile-target"
-                        class="rounded border border-gray-300 bg-white py-2 pl-2 pr-8 text-sm text-gray-700 focus:border-blue-500 focus:outline-none">
-                        <option value="main.tex">main.tex</option>
-                    </select>
+                <div id="download-dropdown" class="relative">
+                    <button id="download-dropdown-btn" type="button"
+                        class="inline-flex items-center gap-1 px-2.5 py-1.5 rounded text-sm text-gray-600 hover:text-gray-800 hover:bg-gray-100 transition">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                            <path d="M10.75 2.75a.75.75 0 0 0-1.5 0v8.614L6.295 8.235a.75.75 0 1 0-1.09 1.03l4.25 4.5a.75.75 0 0 0 1.09 0l4.25-4.5a.75.75 0 0 0-1.09-1.03l-2.955 3.129V2.75Z" />
+                            <path d="M3.5 12.75a.75.75 0 0 0-1.5 0v2.5A2.75 2.75 0 0 0 4.75 18h10.5A2.75 2.75 0 0 0 18 15.25v-2.5a.75.75 0 0 0-1.5 0v2.5c0 .69-.56 1.25-1.25 1.25H4.75c-.69 0-1.25-.56-1.25-1.25v-2.5Z" />
+                        </svg>
+                        <span>Download</span>
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3" viewBox="0 0 20 20" fill="currentColor">
+                            <path fill-rule="evenodd" d="M5.22 8.22a.75.75 0 0 1 1.06 0L10 11.94l3.72-3.72a.75.75 0 1 1 1.06 1.06l-4.25 4.25a.75.75 0 0 1-1.06 0L5.22 9.28a.75.75 0 0 1 0-1.06Z" clip-rule="evenodd" />
+                        </svg>
+                    </button>
+                    <div id="download-dropdown-menu" class="hidden absolute right-0 mt-1 w-44 rounded-md border border-gray-200 bg-white shadow-lg z-50">
+                        <button id="download-source-btn" type="button"
+                            class="w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-t-md">
+                            Download Source (.zip)
+                        </button>
+                        <button id="download-pdf-btn" type="button"
+                            class="w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-b-md border-t border-gray-100">
+                            Download PDF
+                        </button>
+                    </div>
                 </div>
                 <button id="compile-btn"
-                    class="bg-blue-600 text-white py-2 px-4 rounded hover:bg-blue-700 transition">
+                    class="bg-blue-600 text-white py-1.5 px-3 rounded text-sm font-medium hover:bg-blue-700 transition">
                     Compile
                 </button>
             </div>
@@ -138,22 +148,30 @@
         <div id="utility-shell" class="flex bg-gray-900 text-gray-100 border-r border-gray-700 flex-shrink-0">
             <div class="w-12 bg-gray-900 border-r border-gray-700 flex flex-col items-center py-2 gap-2">
                 <button id="sidebar-files-btn" type="button"
-                    class="h-9 w-9 rounded bg-blue-600 text-xs font-medium text-white hover:bg-blue-500" aria-pressed="true" title="Files">
-                    F
+                    class="h-9 w-9 rounded bg-blue-600 flex items-center justify-center text-white hover:bg-blue-500" aria-pressed="true" title="Files">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                        <path d="M3.75 3A1.75 1.75 0 0 0 2 4.75v3.26a3.235 3.235 0 0 1 1.75-.51h12.5c.644 0 1.245.188 1.75.51V6.75A1.75 1.75 0 0 0 16.25 5h-4.836a.25.25 0 0 1-.177-.073L9.823 3.513A1.75 1.75 0 0 0 8.586 3H3.75ZM3.75 9A1.75 1.75 0 0 0 2 10.75v4.5c0 .966.784 1.75 1.75 1.75h12.5A1.75 1.75 0 0 0 18 15.25v-4.5A1.75 1.75 0 0 0 16.25 9H3.75Z" />
+                    </svg>
                 </button>
                 <button id="sidebar-comments-btn" type="button"
-                    class="h-9 w-9 rounded text-xs text-gray-200 hover:bg-gray-700" aria-pressed="false" title="Comments">
-                    C
+                    class="h-9 w-9 rounded flex items-center justify-center text-gray-200 hover:bg-gray-700" aria-pressed="false" title="Comments">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                        <path fill-rule="evenodd" d="M10 2c-2.236 0-4.43.18-6.57.524C1.993 2.755 1 4.014 1 5.426v5.148c0 1.413.993 2.67 2.43 2.902 1.168.188 2.352.327 3.55.414.28.02.521.18.642.413l1.713 3.293a.75.75 0 0 0 1.33 0l1.713-3.293a.783.783 0 0 1 .642-.413 41.102 41.102 0 0 0 3.55-.414c1.437-.231 2.43-1.49 2.43-2.902V5.426c0-1.413-.993-2.67-2.43-2.902A41.289 41.289 0 0 0 10 2ZM6.75 6a.75.75 0 0 0 0 1.5h6.5a.75.75 0 0 0 0-1.5h-6.5Zm0 2.5a.75.75 0 0 0 0 1.5h3.5a.75.75 0 0 0 0-1.5h-3.5Z" clip-rule="evenodd" />
+                    </svg>
                 </button>
                 <button id="sidebar-settings-btn" type="button"
-                    class="h-9 w-9 rounded text-xs text-gray-200 hover:bg-gray-700" aria-pressed="false" title="Settings">
-                    S
+                    class="h-9 w-9 rounded flex items-center justify-center text-gray-200 hover:bg-gray-700" aria-pressed="false" title="Settings">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                        <path fill-rule="evenodd" d="M8.34 1.804A1 1 0 0 1 9.32 1h1.36a1 1 0 0 1 .98.804l.295 1.473c.497.144.971.342 1.416.587l1.25-.834a1 1 0 0 1 1.262.125l.962.962a1 1 0 0 1 .125 1.262l-.834 1.25c.245.445.443.919.587 1.416l1.473.295a1 1 0 0 1 .804.98v1.36a1 1 0 0 1-.804.98l-1.473.295a6.95 6.95 0 0 1-.587 1.416l.834 1.25a1 1 0 0 1-.125 1.262l-.962.962a1 1 0 0 1-1.262.125l-1.25-.834a6.953 6.953 0 0 1-1.416.587l-.295 1.473a1 1 0 0 1-.98.804H9.32a1 1 0 0 1-.98-.804l-.295-1.473a6.957 6.957 0 0 1-1.416-.587l-1.25.834a1 1 0 0 1-1.262-.125l-.962-.962a1 1 0 0 1-.125-1.262l.834-1.25a6.957 6.957 0 0 1-.587-1.416l-1.473-.295A1 1 0 0 1 1 10.68V9.32a1 1 0 0 1 .804-.98l1.473-.295c.144-.497.342-.971.587-1.416l-.834-1.25a1 1 0 0 1 .125-1.262l.962-.962A1 1 0 0 1 5.38 3.03l1.25.834a6.957 6.957 0 0 1 1.416-.587l.295-1.473ZM13 10a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" clip-rule="evenodd" />
+                    </svg>
                 </button>
                 <div class="mt-auto w-full pt-2 border-t border-gray-700 px-1.5">
                     <button id="sidebar-collapse-btn" type="button"
-                        class="h-8 w-full rounded text-xs text-gray-200 hover:bg-gray-700"
+                        class="h-8 w-full rounded flex items-center justify-center text-gray-200 hover:bg-gray-700"
                         aria-expanded="true" aria-label="Collapse tools panel" title="Collapse tools panel">
-                        <span id="sidebar-collapse-icon" aria-hidden="true">&lt;</span>
+                        <svg id="sidebar-collapse-icon" xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                            <path fill-rule="evenodd" d="M11.78 5.22a.75.75 0 0 1 0 1.06L8.06 10l3.72 3.72a.75.75 0 1 1-1.06 1.06l-4.25-4.25a.75.75 0 0 1 0-1.06l4.25-4.25a.75.75 0 0 1 1.06 0Z" clip-rule="evenodd" />
+                        </svg>
                     </button>
                 </div>
             </div>
@@ -177,40 +195,6 @@
                             {{end}}
                         </div>
                         <div id="file-list" class="flex-1 overflow-auto p-2 space-y-1">
-                        </div>
-                        <div class="border-t border-gray-700 p-2 space-y-2 max-h-64 overflow-auto">
-                            <p class="text-xs font-semibold text-gray-300 uppercase tracking-wide">Project Access</p>
-                            {{range .ProjectMembers}}
-                            <div class="rounded bg-gray-700/60 px-2 py-1 text-xs flex items-center justify-between gap-2">
-                                <div class="truncate">
-                                    <span class="text-gray-100">{{.Email}}</span>
-                                    {{if .Name}}<span class="text-gray-400">({{.Name}})</span>{{end}}
-                                </div>
-                                <div class="flex items-center gap-1 shrink-0">
-                                    <span class="rounded bg-gray-600 px-1.5 py-0.5 text-[10px] text-gray-200">{{.Role}}</span>
-                                    {{if and $.CanManageMembers (not .IsOwner)}}
-                                    <form method="POST" action="/projects/{{$.Project.ID}}/members/{{.UserID}}/remove">
-                                        <button type="submit" class="text-red-300 hover:text-red-200">x</button>
-                                    </form>
-                                    {{end}}
-                                </div>
-                            </div>
-                            {{end}}
-                            {{if .CanManageMembers}}
-                            <form method="POST" action="/projects/{{.Project.ID}}/members" class="space-y-2 pt-1">
-                                <input type="email" name="email" placeholder="user@example.com" required
-                                    class="w-full rounded border border-gray-600 bg-gray-800 px-2 py-1 text-xs text-gray-100 focus:border-blue-500 focus:outline-none">
-                                <div class="flex gap-1">
-                                    <select name="role"
-                                        class="flex-1 rounded border border-gray-600 bg-gray-800 px-2 py-1 text-xs text-gray-100 focus:border-blue-500 focus:outline-none">
-                                        <option value="reader">reader</option>
-                                        <option value="commenter">commenter</option>
-                                        <option value="writer">writer</option>
-                                    </select>
-                                    <button type="submit" class="rounded bg-blue-600 px-2 py-1 text-xs text-white hover:bg-blue-500">Add</button>
-                                </div>
-                            </form>
-                            {{end}}
                         </div>
                     </div>
                 </div>
@@ -239,25 +223,63 @@
                     <div id="comment-list" class="flex-1 overflow-auto p-3 space-y-2"></div>
                 </div>
 
-                <div id="sidebar-panel-settings" class="hidden h-full bg-gray-800 text-gray-100 p-3 space-y-3">
-                    <h3 class="text-sm font-semibold text-gray-100">Settings</h3>
-                    <p class="text-xs text-gray-300">
-                        This area is reserved for project settings (main file and related options).
-                    </p>
-                    <div class="rounded border border-gray-700 bg-gray-900/60 p-2 text-xs text-gray-300">
-                        Current compile entry is managed from the top "Entry" selector.
+                <div id="sidebar-panel-settings" class="hidden h-full bg-gray-800 text-gray-100 flex flex-col">
+                    <div class="p-3 space-y-4 border-b border-gray-700">
+                        <h3 class="text-sm font-semibold text-gray-100">Settings</h3>
+                        <div class="space-y-2">
+                            <label for="compile-target" class="text-xs text-gray-300">Entry file</label>
+                            <select id="compile-target"
+                                class="w-full rounded border border-gray-600 bg-gray-900 py-1.5 px-2 text-sm text-gray-100 focus:border-blue-500 focus:outline-none">
+                                <option value="main.tex">main.tex</option>
+                            </select>
+                            <p class="text-[11px] text-gray-400">Select the main file to compile.</p>
+                        </div>
+                    </div>
+                    <div class="flex-1 overflow-auto p-3 space-y-3">
+                        <p class="text-xs font-semibold text-gray-300 uppercase tracking-wide">Project Access</p>
+                        {{range .ProjectMembers}}
+                        <div class="rounded bg-gray-700/60 px-2 py-1.5 text-xs flex items-center justify-between gap-2">
+                            <div class="truncate">
+                                <span class="text-gray-100">{{.Email}}</span>
+                                {{if .Name}}<span class="text-gray-400">({{.Name}})</span>{{end}}
+                            </div>
+                            <div class="flex items-center gap-1 shrink-0">
+                                <span class="rounded bg-gray-600 px-1.5 py-0.5 text-[10px] text-gray-200">{{.Role}}</span>
+                                {{if and $.CanManageMembers (not .IsOwner)}}
+                                <form method="POST" action="/projects/{{$.Project.ID}}/members/{{.UserID}}/remove">
+                                    <button type="submit" class="text-red-300 hover:text-red-200">x</button>
+                                </form>
+                                {{end}}
+                            </div>
+                        </div>
+                        {{end}}
+                        {{if .CanManageMembers}}
+                        <form method="POST" action="/projects/{{.Project.ID}}/members" class="space-y-2 pt-1">
+                            <input type="email" name="email" placeholder="user@example.com" required
+                                class="w-full rounded border border-gray-600 bg-gray-900 px-2 py-1.5 text-xs text-gray-100 focus:border-blue-500 focus:outline-none">
+                            <div class="flex gap-1">
+                                <select name="role"
+                                    class="flex-1 rounded border border-gray-600 bg-gray-900 px-2 py-1.5 text-xs text-gray-100 focus:border-blue-500 focus:outline-none">
+                                    <option value="reader">reader</option>
+                                    <option value="commenter">commenter</option>
+                                    <option value="writer">writer</option>
+                                </select>
+                                <button type="submit" class="rounded bg-blue-600 px-2 py-1.5 text-xs text-white hover:bg-blue-500">Add</button>
+                            </div>
+                        </form>
+                        {{end}}
                     </div>
                 </div>
             </div>
         </div>
 
-        <div id="workspace-layout" data-view="split" class="flex-1 flex overflow-hidden bg-gray-200/50 gap-2 p-2">
-            <div id="work-area" class="flex-1 border border-gray-300 rounded bg-white overflow-hidden">
+        <div id="workspace-layout" data-view="split" class="flex-1 flex overflow-hidden">
+            <div id="work-area" class="flex-1 bg-white overflow-hidden border-r border-gray-200">
                 <div id="editor-container"></div>
                 <div id="file-preview" class="hidden bg-white"></div>
             </div>
 
-            <div id="pdf-container" class="w-2/5 border border-gray-300 rounded bg-gray-200 overflow-auto relative">
+            <div id="pdf-container" class="w-2/5 bg-gray-100 overflow-auto relative">
                 <div id="pdf-toolbar" class="hidden sticky top-0 z-10 border-b border-gray-300 bg-gray-200/95 backdrop-blur px-3 py-2 flex items-center justify-between">
                     <div class="flex items-center gap-2">
                         <button id="pdf-zoom-out" class="px-2 py-1 rounded bg-white border border-gray-300 hover:bg-gray-50 text-sm">-</button>
@@ -291,11 +313,23 @@
 <div id="new-file-modal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
     <div class="bg-white rounded-lg p-6 w-80">
         <h3 class="text-lg font-semibold mb-4">New File</h3>
-        <input type="text" id="new-file-name" placeholder="filename.tex or main.typ"
+        <input type="text" id="new-file-name" placeholder="filename.tex, main.typ, or README.md"
             class="w-full px-3 py-2 border rounded mb-4 focus:outline-none focus:ring-2 focus:ring-blue-500">
         <div class="flex gap-2 justify-end">
             <button id="cancel-new-file" class="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded">Cancel</button>
             <button id="confirm-new-file" class="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700">Create</button>
+        </div>
+    </div>
+</div>
+
+<div id="rename-modal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+    <div class="bg-white rounded-lg p-6 w-80">
+        <h3 class="text-lg font-semibold mb-4">Rename</h3>
+        <input type="text" id="rename-input"
+            class="w-full px-3 py-2 border rounded mb-4 focus:outline-none focus:ring-2 focus:ring-blue-500">
+        <div class="flex gap-2 justify-end">
+            <button id="cancel-rename" class="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded">Cancel</button>
+            <button id="confirm-rename" class="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700">Rename</button>
         </div>
     </div>
 </div>
@@ -403,7 +437,7 @@
         editor = monaco.editor.create(document.getElementById('editor-container'), {
             value: initialContent,
             language: 'latex',
-            theme: 'vs-dark',
+            theme: 'vs',
             fontSize: 14,
             glyphMargin: true,
             minimap: { enabled: false },
@@ -472,7 +506,7 @@
 
     function isCompilableFile(filename) {
         const ext = getFileExtension(filename);
-        return ext === '.tex' || ext === '.typ';
+        return ext === '.tex' || ext === '.typ' || ext === '.md';
     }
 
     function getLanguageForFile(filename) {
@@ -480,6 +514,7 @@
         if (ext === '.tex' || ext === '.ltx' || ext === '.sty' || ext === '.cls') return 'latex';
         if (ext === '.typ') return 'typst';
         if (ext === '.bib' || ext === '.bst') return 'bibtex';
+        if (ext === '.md') return 'markdown';
         return 'plaintext';
     }
 
@@ -789,11 +824,37 @@
         }
         row.appendChild(label);
 
+        const copyPathBtn = document.createElement('button');
+        copyPathBtn.type = 'button';
+        copyPathBtn.className = 'delete-btn text-gray-400 hover:text-gray-200 text-sm px-1.5';
+        copyPathBtn.textContent = '⎘';
+        copyPathBtn.title = 'Copy path';
+        copyPathBtn.onclick = (event) => {
+            event.stopPropagation();
+            navigator.clipboard.writeText(node.path).then(() => {
+                setStatus(`Copied: ${node.path}`);
+            }).catch(() => {
+                setStatus('Failed to copy path', true);
+            });
+        };
+        row.appendChild(copyPathBtn);
+
         if (canWrite) {
+            const renameBtn = document.createElement('button');
+            renameBtn.type = 'button';
+            renameBtn.className = 'delete-btn text-blue-400 hover:text-blue-300 text-sm px-1.5';
+            renameBtn.textContent = '✎';
+            renameBtn.title = 'Rename';
+            renameBtn.onclick = (event) => {
+                event.stopPropagation();
+                openRenameModal(node.path);
+            };
+            row.appendChild(renameBtn);
+
             const deleteBtn = document.createElement('button');
             deleteBtn.type = 'button';
-            deleteBtn.className = 'delete-btn text-red-400 hover:text-red-300 text-xs px-1';
-            deleteBtn.textContent = 'x';
+            deleteBtn.className = 'delete-btn text-red-400 hover:text-red-300 text-sm px-1.5';
+            deleteBtn.textContent = '✕';
             deleteBtn.onclick = (event) => {
                 event.stopPropagation();
                 deleteFile(node.path);
@@ -865,6 +926,9 @@
         if (candidates.includes('main.typ')) {
             return 'main.typ';
         }
+        if (candidates.includes('main.md')) {
+            return 'main.md';
+        }
         return candidates[0] || '';
     }
 
@@ -890,7 +954,7 @@
             select.disabled = true;
             const option = document.createElement('option');
             option.value = '';
-            option.textContent = 'No .tex/.typ files';
+            option.textContent = 'No .tex/.typ/.md files';
             select.appendChild(option);
             return;
         }
@@ -1062,10 +1126,10 @@
         }
         if (enabled) {
             saveBtn.disabled = false;
-            saveBtn.className = 'bg-gray-100 text-gray-700 py-2 px-4 rounded hover:bg-gray-200 transition';
+            saveBtn.className = 'p-1.5 rounded text-gray-500 hover:text-gray-700 hover:bg-gray-100 transition';
         } else {
             saveBtn.disabled = true;
-            saveBtn.className = 'bg-gray-200 text-gray-400 py-2 px-4 rounded cursor-not-allowed';
+            saveBtn.className = 'p-1.5 rounded text-gray-300 cursor-not-allowed';
         }
     }
 
@@ -1120,8 +1184,8 @@
             return;
         }
         button.className = isActive
-            ? 'h-9 w-9 rounded bg-blue-600 text-xs font-medium text-white hover:bg-blue-500'
-            : 'h-9 w-9 rounded text-xs text-gray-200 hover:bg-gray-700';
+            ? 'h-9 w-9 rounded bg-blue-600 flex items-center justify-center text-white hover:bg-blue-500'
+            : 'h-9 w-9 rounded flex items-center justify-center text-gray-200 hover:bg-gray-700';
         button.setAttribute('aria-pressed', isActive ? 'true' : 'false');
     }
 
@@ -1130,8 +1194,8 @@
             return;
         }
         button.className = isActive
-            ? 'rounded bg-blue-600 px-2 py-1 text-xs font-medium text-white'
-            : 'rounded px-2 py-1 text-xs text-gray-600 hover:bg-gray-100';
+            ? 'rounded bg-white shadow-sm px-3 py-1 text-xs font-medium text-gray-800'
+            : 'rounded px-3 py-1 text-xs text-gray-600 hover:bg-white hover:shadow-sm transition';
         button.setAttribute('aria-pressed', isActive ? 'true' : 'false');
     }
 
@@ -1191,7 +1255,9 @@
         const collapseIcon = document.getElementById('sidebar-collapse-icon');
 
         shell.classList.toggle('utility-collapsed', isSidebarCollapsed);
-        collapseIcon.textContent = isSidebarCollapsed ? '>' : '<';
+        collapseIcon.innerHTML = isSidebarCollapsed
+            ? '<path fill-rule="evenodd" d="M8.22 5.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.75.75 0 0 1-1.06-1.06L11.94 10 8.22 6.28a.75.75 0 0 1 0-1.06Z" clip-rule="evenodd" />'
+            : '<path fill-rule="evenodd" d="M11.78 5.22a.75.75 0 0 1 0 1.06L8.06 10l3.72 3.72a.75.75 0 1 1-1.06 1.06l-4.25-4.25a.75.75 0 0 1 0-1.06l4.25-4.25a.75.75 0 0 1 1.06 0Z" clip-rule="evenodd" />';
         const label = isSidebarCollapsed ? 'Expand tools panel' : 'Collapse tools panel';
         collapseBtn.title = label;
         collapseBtn.setAttribute('aria-label', label);
@@ -1376,13 +1442,13 @@
 
         items.forEach(comment => {
             const card = document.createElement('div');
-            card.className = 'rounded border border-amber-200 bg-amber-50 p-2 space-y-2';
+            card.className = 'rounded border border-amber-200 bg-amber-50 p-2 space-y-2 overflow-hidden';
 
             const topRow = document.createElement('div');
             topRow.className = 'flex items-start justify-between gap-2';
 
             const meta = document.createElement('div');
-            meta.className = 'text-[11px] text-amber-900';
+            meta.className = 'text-[11px] text-amber-900 truncate flex-1 min-w-0';
             const rangeLabel = comment.startLine === comment.endLine
                 ? `${comment.filePath}:${comment.startLine}`
                 : `${comment.filePath}:${comment.startLine}-${comment.endLine}`;
@@ -1784,7 +1850,7 @@
 
         const selectedEntry = compileTarget;
         if (!selectedEntry || !filesByPath[selectedEntry] || filesByPath[selectedEntry].isDir || !isCompilableFile(selectedEntry)) {
-            setStatus('Select a .tex or .typ file to compile', true);
+            setStatus('Select a .tex, .typ, or .md file to compile', true);
             return;
         }
 
@@ -1894,6 +1960,85 @@
             setStatus('Failed to delete file', true);
         }
     }
+
+    let renameTargetPath = '';
+
+    function openRenameModal(path) {
+        renameTargetPath = path;
+        const input = document.getElementById('rename-input');
+        input.value = getBaseName(path);
+        document.getElementById('rename-modal').classList.remove('hidden');
+        input.focus();
+        input.select();
+    }
+
+    function closeRenameModal() {
+        document.getElementById('rename-modal').classList.add('hidden');
+        document.getElementById('rename-input').value = '';
+        renameTargetPath = '';
+    }
+
+    async function confirmRename() {
+        if (!canWrite) {
+            setStatus('Read-only access', true);
+            return;
+        }
+
+        const newName = document.getElementById('rename-input').value.trim();
+        if (!newName || !renameTargetPath) {
+            closeRenameModal();
+            return;
+        }
+
+        const oldName = getBaseName(renameTargetPath);
+        if (newName === oldName) {
+            closeRenameModal();
+            return;
+        }
+
+        const parentDir = getParentPath(renameTargetPath);
+        const newPath = parentDir ? `${parentDir}/${newName}` : newName;
+
+        setStatus(`Renaming ${oldName}...`);
+
+        try {
+            const response = await fetch(`/api/projects/${projectId}/files/move`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: `source=${encodeURIComponent(renameTargetPath)}&target=${encodeURIComponent(newPath)}`,
+            });
+
+            if (!response.ok) {
+                const errorText = await response.text();
+                setStatus(errorText || 'Failed to rename', true);
+                closeRenameModal();
+                return;
+            }
+
+            remapPathState(renameTargetPath, newPath);
+            await loadFileList();
+            await loadComments();
+
+            if (currentFile === renameTargetPath || currentFile.startsWith(renameTargetPath + '/')) {
+                const updatedPath = currentFile.replace(renameTargetPath, newPath);
+                if (filesByPath[updatedPath] && !filesByPath[updatedPath].isDir) {
+                    await openFile(updatedPath);
+                }
+            }
+
+            setStatus(`Renamed to ${newName}`);
+        } catch (_) {
+            setStatus('Failed to rename', true);
+        }
+        closeRenameModal();
+    }
+
+    document.getElementById('cancel-rename').onclick = closeRenameModal;
+    document.getElementById('confirm-rename').onclick = confirmRename;
+    document.getElementById('rename-input').onkeydown = (e) => {
+        if (e.key === 'Enter') confirmRename();
+        if (e.key === 'Escape') closeRenameModal();
+    };
 
     async function createEntry(rawPath, type = 'file') {
         if (!canWrite) {
@@ -2605,9 +2750,36 @@
     document.getElementById('pdf-zoom-in').addEventListener('click', () => setPDFZoom(pdfZoom + 0.1));
     document.getElementById('pdf-zoom-reset').addEventListener('click', () => setPDFZoom(1));
     document.getElementById('pdf-fit-width').addEventListener('click', () => setPDFZoom(1));
-    document.getElementById('show-in-pdf-btn').addEventListener('click', showCurrentLineInPDF);
-    document.getElementById('download-source-btn').addEventListener('click', downloadSourceArchive);
-    document.getElementById('download-pdf-btn').addEventListener('click', downloadCompiledPDF);
+    document.getElementById('download-source-btn').addEventListener('click', () => {
+        closeDownloadDropdown();
+        downloadSourceArchive();
+    });
+    document.getElementById('download-pdf-btn').addEventListener('click', () => {
+        closeDownloadDropdown();
+        downloadCompiledPDF();
+    });
+
+    function toggleDownloadDropdown() {
+        const menu = document.getElementById('download-dropdown-menu');
+        menu.classList.toggle('hidden');
+    }
+
+    function closeDownloadDropdown() {
+        const menu = document.getElementById('download-dropdown-menu');
+        menu.classList.add('hidden');
+    }
+
+    document.getElementById('download-dropdown-btn').addEventListener('click', (event) => {
+        event.stopPropagation();
+        toggleDownloadDropdown();
+    });
+
+    document.addEventListener('click', (event) => {
+        const dropdown = document.getElementById('download-dropdown');
+        if (!dropdown.contains(event.target)) {
+            closeDownloadDropdown();
+        }
+    });
     document.getElementById('save-btn').addEventListener('click', save);
     document.getElementById('view-editor-btn').addEventListener('click', () => applyWorkspaceView(WORKSPACE_VIEW_EDITOR));
     document.getElementById('view-pdf-btn').addEventListener('click', () => applyWorkspaceView(WORKSPACE_VIEW_PDF));
