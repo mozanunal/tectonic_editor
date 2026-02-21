@@ -826,7 +826,7 @@
 
         const copyPathBtn = document.createElement('button');
         copyPathBtn.type = 'button';
-        copyPathBtn.className = 'delete-btn text-gray-400 hover:text-gray-200 text-sm px-1.5';
+        copyPathBtn.className = 'delete-btn text-gray-400 hover:text-gray-200 text-base p-0';
         copyPathBtn.textContent = '⎘';
         copyPathBtn.title = 'Copy path';
         copyPathBtn.onclick = (event) => {
@@ -842,7 +842,7 @@
         if (canWrite) {
             const renameBtn = document.createElement('button');
             renameBtn.type = 'button';
-            renameBtn.className = 'delete-btn text-blue-400 hover:text-blue-300 text-sm px-1.5';
+            renameBtn.className = 'delete-btn text-blue-400 hover:text-blue-300 text-base p-0';
             renameBtn.textContent = '✎';
             renameBtn.title = 'Rename';
             renameBtn.onclick = (event) => {
@@ -853,7 +853,7 @@
 
             const deleteBtn = document.createElement('button');
             deleteBtn.type = 'button';
-            deleteBtn.className = 'delete-btn text-red-400 hover:text-red-300 text-sm px-1.5';
+            deleteBtn.className = 'delete-btn text-red-400 hover:text-red-300 text-base p-0';
             deleteBtn.textContent = '✕';
             deleteBtn.onclick = (event) => {
                 event.stopPropagation();
