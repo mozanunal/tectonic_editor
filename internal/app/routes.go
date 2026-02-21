@@ -38,6 +38,8 @@ func (s *Server) setupRoutes() http.Handler {
 		r.Post("/compile/{id}", s.handleCompile)
 		r.Post("/save/{id}", s.handleSave)
 		r.Get("/pdf/{id}", s.handleGetPDF)
+		r.Get("/api/projects/{id}/download/source", s.handleDownloadSource)
+		r.Get("/api/projects/{id}/download/pdf", s.handleDownloadPDF)
 
 		r.Get("/api/projects/{id}/files", s.handleListFiles)
 		r.Post("/api/projects/{id}/files", s.handleCreateFile)

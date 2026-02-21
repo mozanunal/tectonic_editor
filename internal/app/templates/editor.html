@@ -30,10 +30,13 @@
             width: auto;
             flex: 1 1 auto;
         }
-        #workspace-layout[data-view="split"] #work-area { display: block; }
+        #workspace-layout[data-view="split"] #work-area {
+            display: block;
+            flex: 1 1 0;
+        }
         #workspace-layout[data-view="split"] #pdf-container {
-            width: 40%;
-            flex-shrink: 0;
+            width: auto;
+            flex: 1 1 0;
             display: block;
         }
         .file-tree-row:hover .delete-btn { display: block; }
@@ -103,6 +106,14 @@
                 <button id="show-in-pdf-btn"
                     class="bg-gray-100 text-gray-700 py-2 px-4 rounded hover:bg-gray-200 transition">
                     Show in PDF
+                </button>
+                <button id="download-source-btn"
+                    class="bg-gray-100 text-gray-700 py-2 px-4 rounded hover:bg-gray-200 transition">
+                    Download Source
+                </button>
+                <button id="download-pdf-btn"
+                    class="bg-gray-100 text-gray-700 py-2 px-4 rounded hover:bg-gray-200 transition">
+                    Download PDF
                 </button>
                 <button id="save-btn"
                     class="bg-gray-100 text-gray-700 py-2 px-4 rounded hover:bg-gray-200 transition">
@@ -2008,6 +2019,71 @@
         status.className = isError ? 'text-sm text-red-500' : 'text-sm text-gray-500';
     }
 
+    function parseDownloadFilename(contentDisposition) {
+        if (!contentDisposition) {
+            return '';
+        }
+        const utf8Match = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i);
+        if (utf8Match && utf8Match[1]) {
+            try {
+                return decodeURIComponent(utf8Match[1]);
+            } catch (_) {
+                return utf8Match[1];
+            }
+        }
+        const plainMatch = contentDisposition.match(/filename="?([^\";]+)"?/i);
+        if (plainMatch && plainMatch[1]) {
+            return plainMatch[1];
+        }
+        return '';
+    }
+
+    async function downloadBlob(url, fallbackFilename, successStatus, failureStatus) {
+        try {
+            const response = await fetch(url);
+            if (!response.ok) {
+                const message = (await response.text()).trim();
+                setStatus(message || failureStatus, true);
+                return;
+            }
+
+            const blob = await response.blob();
+            const fileName = parseDownloadFilename(response.headers.get('Content-Disposition')) || fallbackFilename;
+            const objectURL = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = objectURL;
+            link.download = fileName;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            setTimeout(() => URL.revokeObjectURL(objectURL), 1000);
+            setStatus(successStatus);
+        } catch (_) {
+            setStatus(failureStatus, true);
+        }
+    }
+
+    async function downloadSourceArchive() {
+        await downloadBlob(
+            `/api/projects/${projectId}/download/source`,
+            `${projectId}-source.zip`,
+            'Downloaded source archive',
+            'Failed to download source archive',
+        );
+    }
+
+    async function downloadCompiledPDF() {
+        const entryFile = compileTarget ? getBaseName(compileTarget) : 'document';
+        const dotIndex = entryFile.lastIndexOf('.');
+        const pdfName = `${dotIndex > 0 ? entryFile.slice(0, dotIndex) : entryFile}.pdf`;
+        await downloadBlob(
+            `/api/projects/${projectId}/download/pdf`,
+            pdfName,
+            'Downloaded PDF',
+            'Failed to download PDF',
+        );
+    }
+
     if (initialErrorMessage) {
         setStatus(initialErrorMessage, true);
     } else if (initialStatusMessage) {
@@ -2530,6 +2606,8 @@
     document.getElementById('pdf-zoom-reset').addEventListener('click', () => setPDFZoom(1));
     document.getElementById('pdf-fit-width').addEventListener('click', () => setPDFZoom(1));
     document.getElementById('show-in-pdf-btn').addEventListener('click', showCurrentLineInPDF);
+    document.getElementById('download-source-btn').addEventListener('click', downloadSourceArchive);
+    document.getElementById('download-pdf-btn').addEventListener('click', downloadCompiledPDF);
     document.getElementById('save-btn').addEventListener('click', save);
     document.getElementById('view-editor-btn').addEventListener('click', () => applyWorkspaceView(WORKSPACE_VIEW_EDITOR));
     document.getElementById('view-pdf-btn').addEventListener('click', () => applyWorkspaceView(WORKSPACE_VIEW_PDF));

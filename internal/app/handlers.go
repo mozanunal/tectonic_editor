@@ -1,6 +1,7 @@
 package app
 
 import (
+	"archive/zip"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -668,6 +669,155 @@ func (s *Server) handleGetPDF(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/pdf")
 	w.Write(pdf)
+}
+
+func sanitizeDownloadBaseName(name, fallback string) string {
+	base := strings.TrimSpace(name)
+	if base == "" {
+		base = fallback
+	}
+	if base == "" {
+		base = "project"
+	}
+
+	var builder strings.Builder
+	lastDash := false
+	for _, r := range base {
+		switch {
+		case (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9'):
+			builder.WriteRune(r)
+			lastDash = false
+		case r == '-' || r == '_' || r == '.':
+			builder.WriteRune(r)
+			lastDash = false
+		case r == ' ':
+			if !lastDash && builder.Len() > 0 {
+				builder.WriteByte('-')
+				lastDash = true
+			}
+		}
+	}
+
+	sanitized := strings.Trim(builder.String(), "-._")
+	if sanitized == "" {
+		return "project"
+	}
+	return sanitized
+}
+
+func (s *Server) projectDownloadBaseName(projectID string) string {
+	var projectName string
+	err := s.db.QueryRow("SELECT name FROM projects WHERE id = ?", projectID).Scan(&projectName)
+	if err == nil {
+		return sanitizeDownloadBaseName(projectName, projectID)
+	}
+	return sanitizeDownloadBaseName(projectID, "project")
+}
+
+func (s *Server) handleDownloadPDF(w http.ResponseWriter, r *http.Request) {
+	access, ok := s.requireProjectAccess(w, r, projectAccessRead)
+	if !ok {
+		return
+	}
+	projectID := access.ProjectID
+
+	pdfPath := filepath.Join(s.projectsDir, projectID, "main.pdf")
+	pdf, err := os.ReadFile(pdfPath)
+	if err != nil {
+		http.Error(w, "PDF not found. Compile first.", http.StatusNotFound)
+		return
+	}
+
+	baseName := s.projectDownloadBaseName(projectID)
+	w.Header().Set("Content-Type", "application/pdf")
+	w.Header().Set("Content-Disposition", "attachment; filename=\""+baseName+".pdf\"")
+	w.Write(pdf)
+}
+
+func (s *Server) handleDownloadSource(w http.ResponseWriter, r *http.Request) {
+	access, ok := s.requireProjectAccess(w, r, projectAccessRead)
+	if !ok {
+		return
+	}
+	projectID := access.ProjectID
+	projectDir := filepath.Join(s.projectsDir, projectID)
+
+	filePaths := make([]string, 0, 32)
+	err := filepath.WalkDir(projectDir, func(currentPath string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if currentPath == projectDir {
+			return nil
+		}
+
+		relPath, err := filepath.Rel(projectDir, currentPath)
+		if err != nil {
+			return err
+		}
+		relPath = filepath.ToSlash(relPath)
+
+		if shouldSkipFileListEntry(relPath, entry.IsDir()) {
+			if entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
+		if entry.IsDir() {
+			return nil
+		}
+
+		filePaths = append(filePaths, relPath)
+		return nil
+	})
+	if err != nil {
+		http.Error(w, "Failed to build source archive", http.StatusInternalServerError)
+		return
+	}
+
+	baseName := s.projectDownloadBaseName(projectID)
+	w.Header().Set("Content-Type", "application/zip")
+	w.Header().Set("Content-Disposition", "attachment; filename=\""+baseName+"-source.zip\"")
+
+	zipWriter := zip.NewWriter(w)
+	for _, relPath := range filePaths {
+		absPath := filepath.Join(projectDir, filepath.FromSlash(relPath))
+		fileInfo, err := os.Stat(absPath)
+		if err != nil {
+			zipWriter.Close()
+			return
+		}
+
+		header, err := zip.FileInfoHeader(fileInfo)
+		if err != nil {
+			zipWriter.Close()
+			return
+		}
+		header.Name = relPath
+		header.Method = zip.Deflate
+
+		entryWriter, err := zipWriter.CreateHeader(header)
+		if err != nil {
+			zipWriter.Close()
+			return
+		}
+
+		file, err := os.Open(absPath)
+		if err != nil {
+			zipWriter.Close()
+			return
+		}
+
+		_, copyErr := io.Copy(entryWriter, file)
+		closeErr := file.Close()
+		if copyErr != nil || closeErr != nil {
+			zipWriter.Close()
+			return
+		}
+	}
+
+	zipWriter.Close()
 }
 
 type FileInfo struct {
