@@ -20,3 +20,4 @@ node_modules/
 # Build artifacts
 *.log
 /server
+/internal/app/static/style.css

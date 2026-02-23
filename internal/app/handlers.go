@@ -910,7 +910,7 @@ func defaultCompileEntry(projectDir string) (string, error) {
 	}
 
 	if len(candidates) == 0 {
-		return "", errors.New("No .tex, .typ, or .md entry file found")
+		return "", errors.New("no .tex, .typ, or .md entry file found")
 	}
 
 	sort.Strings(candidates)
