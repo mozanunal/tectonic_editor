@@ -1,4 +1,4 @@
-module github.com/mozanunal/tectonic-web
+module github.com/mozanunal/plain-tex
 
 go 1.22
 

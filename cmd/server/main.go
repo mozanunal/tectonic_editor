@@ -6,8 +6,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/mozanunal/tectonic-web/internal/app"
-	"github.com/mozanunal/tectonic-web/internal/db"
+	"github.com/mozanunal/plain-tex/internal/app"
+	"github.com/mozanunal/plain-tex/internal/db"
 )
 
 func main() {

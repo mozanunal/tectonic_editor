@@ -1,6 +1,6 @@
-# Tectonic Web
+# plain-tex
 
-Tectonic Web is a self-hosted collaborative editor for LaTeX/Typst projects. It provides a browser-based workspace with file management, compilation, PDF preview, comments, and role-based project access.
+plain-tex is a self-hosted collaborative editor for LaTeX/Typst projects. It provides a browser-based workspace with file management, compilation, PDF preview, comments, and role-based project access.
 
 ## Features
 
