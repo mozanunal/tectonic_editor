@@ -39,6 +39,7 @@ func migrate(db *sql.DB) error {
 		id TEXT PRIMARY KEY,
 		user_id TEXT NOT NULL,
 		name TEXT NOT NULL,
+		compile_entry TEXT NOT NULL DEFAULT '',
 		created TEXT DEFAULT (datetime('now')),
 		updated TEXT DEFAULT (datetime('now')),
 		FOREIGN KEY (user_id) REFERENCES users(id)
@@ -64,7 +65,7 @@ func migrate(db *sql.DB) error {
 
 		CREATE INDEX IF NOT EXISTS idx_projects_user_id ON projects(user_id);
 
-		CREATE TABLE IF NOT EXISTS project_members (
+	CREATE TABLE IF NOT EXISTS project_members (
 			project_id TEXT NOT NULL,
 			user_id TEXT NOT NULL,
 		role TEXT NOT NULL CHECK (role IN ('reader', 'commenter', 'writer')),
@@ -79,6 +80,31 @@ func migrate(db *sql.DB) error {
 		CREATE INDEX IF NOT EXISTS idx_project_members_project_id ON project_members(project_id);
 		CREATE INDEX IF NOT EXISTS idx_comments_project_file ON comments(project_id, file_path, start_line);
 		CREATE INDEX IF NOT EXISTS idx_comments_project_created ON comments(project_id, created);
+
+		CREATE TABLE IF NOT EXISTS project_git_configs (
+			project_id TEXT PRIMARY KEY,
+			remote_url TEXT NOT NULL,
+			branch TEXT NOT NULL,
+			ssh_private_key_encrypted TEXT NOT NULL DEFAULT '',
+			last_sync TEXT,
+			created TEXT DEFAULT (datetime('now')),
+			updated TEXT DEFAULT (datetime('now')),
+			FOREIGN KEY (project_id) REFERENCES projects(id)
+		) STRICT;
+
+		CREATE INDEX IF NOT EXISTS idx_project_git_configs_updated ON project_git_configs(updated);
+
+		CREATE TABLE IF NOT EXISTS user_git_keys (
+			user_id TEXT PRIMARY KEY,
+			public_key TEXT NOT NULL,
+			private_key_encrypted TEXT NOT NULL,
+			fingerprint TEXT NOT NULL,
+			created TEXT DEFAULT (datetime('now')),
+			updated TEXT DEFAULT (datetime('now')),
+			FOREIGN KEY (user_id) REFERENCES users(id)
+		) STRICT;
+
+		CREATE INDEX IF NOT EXISTS idx_user_git_keys_updated ON user_git_keys(updated);
 		`
 
 	if _, err := db.Exec(schema); err != nil {
@@ -86,6 +112,10 @@ func migrate(db *sql.DB) error {
 	}
 
 	if err := ensureUsersAdminColumn(db); err != nil {
+		return err
+	}
+
+	if err := ensureProjectsCompileEntryColumn(db); err != nil {
 		return err
 	}
 
@@ -106,6 +136,19 @@ func ensureUsersAdminColumn(db *sql.DB) error {
 	}
 
 	_, err = db.Exec("ALTER TABLE users ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0")
+	return err
+}
+
+func ensureProjectsCompileEntryColumn(db *sql.DB) error {
+	exists, err := columnExists(db, "projects", "compile_entry")
+	if err != nil {
+		return err
+	}
+	if exists {
+		return nil
+	}
+
+	_, err = db.Exec("ALTER TABLE projects ADD COLUMN compile_entry TEXT NOT NULL DEFAULT ''")
 	return err
 }
 

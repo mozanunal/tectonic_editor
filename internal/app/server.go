@@ -4,21 +4,25 @@ import (
 	"database/sql"
 	"html/template"
 	"net/http"
+
+	"github.com/mozanunal/plain-tex/internal/gitclient"
 )
 
 type Server struct {
 	db          *sql.DB
 	compiler    *Compiler
+	git         *gitclient.Client
 	templates   *template.Template
 	jwtSecret   []byte
 	projectsDir string
 	router      http.Handler
 }
 
-func NewServer(db *sql.DB, jwtSecret string, projectsDir string, tectonicBin string, typstBin string) (*Server, error) {
+func NewServer(db *sql.DB, jwtSecret string, projectsDir string, tectonicBin string, typstBin string, gitBin string) (*Server, error) {
 	s := &Server{
 		db:          db,
 		compiler:    NewCompiler(tectonicBin, typstBin),
+		git:         gitclient.New(gitBin),
 		jwtSecret:   []byte(jwtSecret),
 		projectsDir: projectsDir,
 	}

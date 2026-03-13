@@ -24,9 +24,11 @@ import (
 type PageData struct {
 	User                 *User
 	Users                []UserSummary
+	UserGitKey           *UserGitKeySummary
 	Projects             []Project
 	Project              *Project
 	ProjectMembers       []ProjectMember
+	CompileTarget        string
 	Content              string
 	Error                string
 	Status               string
@@ -37,13 +39,14 @@ type PageData struct {
 }
 
 type Project struct {
-	ID         string
-	UserID     string
-	Name       string
-	Created    string
-	Updated    string
-	AccessRole string
-	OwnerEmail string
+	ID           string
+	UserID       string
+	Name         string
+	CompileEntry string
+	Created      string
+	Updated      string
+	AccessRole   string
+	OwnerEmail   string
 }
 
 type UserSummary struct {
@@ -51,6 +54,14 @@ type UserSummary struct {
 	Email   string
 	Name    string
 	IsAdmin bool
+}
+
+type UserGitKeySummary struct {
+	UserID      string
+	PublicKey   string
+	Fingerprint string
+	Created     string
+	Updated     string
 }
 
 type ProjectMember struct {
@@ -281,6 +292,13 @@ func (s *Server) handleProjectsPage(w http.ResponseWriter, r *http.Request) {
 		Error:    strings.TrimSpace(r.URL.Query().Get("error")),
 	}
 
+	userGitKey, err := s.getUserGitKeySummary(user.ID)
+	if err != nil {
+		http.Error(w, "Failed to load Git key", http.StatusInternalServerError)
+		return
+	}
+	pageData.UserGitKey = userGitKey
+
 	s.templates.ExecuteTemplate(w, "projects.html", pageData)
 }
 
@@ -494,6 +512,10 @@ func (s *Server) handleDeleteProject(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to delete project", http.StatusInternalServerError)
 		return
 	}
+	if _, err := s.db.Exec("DELETE FROM project_git_configs WHERE project_id = ?", access.ProjectID); err != nil {
+		http.Error(w, "Failed to delete project", http.StatusInternalServerError)
+		return
+	}
 
 	result, err := s.db.Exec(
 		"DELETE FROM projects WHERE id = ?",
@@ -534,20 +556,31 @@ func (s *Server) handleEditorPage(w http.ResponseWriter, r *http.Request) {
 
 	var project Project
 	err = s.db.QueryRow(
-		`SELECT p.id, p.user_id, p.name, p.created, p.updated, owner.email
+		`SELECT p.id, p.user_id, p.name, p.compile_entry, p.created, p.updated, owner.email
 		FROM projects p
 		JOIN users owner ON owner.id = p.user_id
 		WHERE p.id = ?`,
 		projectID,
-	).Scan(&project.ID, &project.UserID, &project.Name, &project.Created, &project.Updated, &project.OwnerEmail)
+	).Scan(&project.ID, &project.UserID, &project.Name, &project.CompileEntry, &project.Created, &project.Updated, &project.OwnerEmail)
 	if err != nil {
 		http.Error(w, "Failed to load project", http.StatusInternalServerError)
 		return
 	}
 	project.AccessRole = access.EffectiveRole
 
-	texPath := filepath.Join(s.projectsDir, projectID, "main.tex")
-	content, _ := os.ReadFile(texPath)
+	projectDir := filepath.Join(s.projectsDir, projectID)
+	compileTarget, err := s.preferredCompileEntry(projectID, projectDir)
+	if err != nil {
+		http.Error(w, "Failed to load compile target", http.StatusInternalServerError)
+		return
+	}
+
+	content := []byte{}
+	if compileTarget != "" {
+		if _, targetPath, resolveErr := resolveProjectPath(projectDir, compileTarget, false); resolveErr == nil {
+			content, _ = os.ReadFile(targetPath)
+		}
+	}
 
 	members, err := s.listProjectMembers(projectID)
 	if err != nil {
@@ -555,10 +588,18 @@ func (s *Server) handleEditorPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	userGitKey, err := s.getUserGitKeySummary(user.ID)
+	if err != nil {
+		http.Error(w, "Failed to load Git key", http.StatusInternalServerError)
+		return
+	}
+
 	s.templates.ExecuteTemplate(w, "editor.html", PageData{
 		User:             user,
+		UserGitKey:       userGitKey,
 		Project:          &project,
 		ProjectMembers:   members,
+		CompileTarget:    compileTarget,
 		Content:          string(content),
 		Status:           strings.TrimSpace(r.URL.Query().Get("status")),
 		Error:            strings.TrimSpace(r.URL.Query().Get("error")),
@@ -579,9 +620,13 @@ func (s *Server) handleCompile(w http.ResponseWriter, r *http.Request) {
 
 	entry := strings.TrimSpace(r.FormValue("entry"))
 	if entry == "" {
-		defaultEntry, err := defaultCompileEntry(projectDir)
+		defaultEntry, err := s.preferredCompileEntry(projectID, projectDir)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			http.Error(w, "Failed to resolve compile entry", http.StatusInternalServerError)
+			return
+		}
+		if defaultEntry == "" {
+			http.Error(w, errNoCompileEntry.Error(), http.StatusBadRequest)
 			return
 		}
 		entry = defaultEntry
@@ -614,6 +659,11 @@ func (s *Server) handleCompile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := s.setProjectCompileEntry(projectID, entry); err != nil {
+		http.Error(w, "Failed to save compile target", http.StatusInternalServerError)
+		return
+	}
+
 	compileStartedAt := time.Now()
 	pdf, output, err := s.compiler.Compile(projectDir, entry)
 	compileDurationMs := time.Since(compileStartedAt).Milliseconds()
@@ -631,6 +681,55 @@ func (s *Server) handleCompile(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/pdf")
 	w.Write(pdf)
+}
+
+func (s *Server) handleUpdateCompileTarget(w http.ResponseWriter, r *http.Request) {
+	access, ok := s.requireProjectAccess(w, r, projectAccessWrite)
+	if !ok {
+		return
+	}
+
+	entry := strings.TrimSpace(r.FormValue("entry"))
+	if entry == "" {
+		if err := s.setProjectCompileEntry(access.ProjectID, ""); err != nil {
+			http.Error(w, "Failed to clear compile target", http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	projectDir := filepath.Join(s.projectsDir, access.ProjectID)
+	normalizedEntry, entryPath, err := resolveProjectPath(projectDir, entry, false)
+	if err != nil {
+		http.Error(w, "Invalid compile entry", http.StatusBadRequest)
+		return
+	}
+	if !isCompilableSource(normalizedEntry) {
+		http.Error(w, "Compile entry must be a .tex, .typ, or .md file", http.StatusBadRequest)
+		return
+	}
+
+	entryInfo, err := os.Stat(entryPath)
+	if os.IsNotExist(err) {
+		http.Error(w, "Compile entry file not found", http.StatusBadRequest)
+		return
+	}
+	if err != nil {
+		http.Error(w, "Failed to access compile entry", http.StatusInternalServerError)
+		return
+	}
+	if entryInfo.IsDir() {
+		http.Error(w, "Compile entry must be a file", http.StatusBadRequest)
+		return
+	}
+
+	if err := s.setProjectCompileEntry(access.ProjectID, normalizedEntry); err != nil {
+		http.Error(w, "Failed to save compile target", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) handleSave(w http.ResponseWriter, r *http.Request) {
@@ -850,6 +949,8 @@ var compilerArtifacts = map[string]struct{}{
 	"main.aux": {},
 }
 
+var errNoCompileEntry = errors.New("no .tex, .typ, or .md entry file found")
+
 func isCompilableSource(name string) bool {
 	switch strings.ToLower(filepath.Ext(name)) {
 	case ".tex", ".typ", ".md":
@@ -910,7 +1011,7 @@ func defaultCompileEntry(projectDir string) (string, error) {
 	}
 
 	if len(candidates) == 0 {
-		return "", errors.New("no .tex, .typ, or .md entry file found")
+		return "", errNoCompileEntry
 	}
 
 	sort.Strings(candidates)
@@ -1263,6 +1364,46 @@ func shouldSkipFileListEntry(rel string, isDir bool) bool {
 
 func (s *Server) touchProject(projectID string) {
 	s.db.Exec("UPDATE projects SET updated = datetime('now') WHERE id = ?", projectID)
+}
+
+func (s *Server) getProjectCompileEntry(projectID string) (string, error) {
+	var entry string
+	err := s.db.QueryRow("SELECT compile_entry FROM projects WHERE id = ?", projectID).Scan(&entry)
+	return strings.TrimSpace(entry), err
+}
+
+func (s *Server) setProjectCompileEntry(projectID string, entry string) error {
+	entry = strings.TrimSpace(entry)
+	_, err := s.db.Exec(
+		"UPDATE projects SET compile_entry = ?, updated = datetime('now') WHERE id = ?",
+		entry, projectID,
+	)
+	return err
+}
+
+func (s *Server) preferredCompileEntry(projectID, projectDir string) (string, error) {
+	storedEntry, err := s.getProjectCompileEntry(projectID)
+	if err != nil && err != sql.ErrNoRows {
+		return "", err
+	}
+
+	if storedEntry != "" {
+		normalizedEntry, entryPath, resolveErr := resolveProjectPath(projectDir, storedEntry, false)
+		if resolveErr == nil && isCompilableSource(normalizedEntry) {
+			if entryInfo, statErr := os.Stat(entryPath); statErr == nil && !entryInfo.IsDir() {
+				return normalizedEntry, nil
+			}
+		}
+	}
+
+	defaultEntry, err := defaultCompileEntry(projectDir)
+	if err == errNoCompileEntry {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return defaultEntry, nil
 }
 
 func (s *Server) deleteCommentsForPath(projectID, path string) {

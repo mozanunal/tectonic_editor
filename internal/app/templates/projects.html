@@ -46,6 +46,109 @@
           </form>
         </div>
 
+        <section class="bg-white rounded-lg shadow p-5 space-y-4">
+          <div class="space-y-1">
+            <h3 class="text-lg font-semibold text-gray-800">Your SSH Key</h3>
+            <p class="text-sm text-gray-500">
+              SSH remotes use your account key. Add the public key below to GitHub, GitLab, or your Git host.
+            </p>
+          </div>
+          {{if .UserGitKey}}
+          <div class="grid gap-3 lg:grid-cols-[1fr_auto] lg:items-start">
+            <div class="space-y-2">
+              <div class="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-800">
+                This is your public key. Add it to GitHub, GitLab, or your Git host. The private key stays inside plain-tex.
+              </div>
+              <div class="text-xs text-gray-500">
+                <span class="font-medium text-gray-700">Fingerprint:</span> {{.UserGitKey.Fingerprint}}
+              </div>
+              <label class="block text-xs font-medium text-gray-700">Public Key</label>
+              <textarea
+                readonly
+                rows="4"
+                class="w-full px-3 py-2 border border-gray-300 rounded-md bg-gray-50 text-xs text-gray-700 focus:outline-none"
+              >{{.UserGitKey.PublicKey}}</textarea>
+            </div>
+            <div class="flex flex-col gap-2">
+              <form method="POST" action="/user/git-key/generate">
+                <button
+                  type="submit"
+                  class="w-full bg-gray-900 text-white py-2 px-4 rounded-md hover:bg-gray-800 transition"
+                >
+                  Regenerate Key
+                </button>
+              </form>
+              <form method="POST" action="/user/git-key/delete">
+                <button
+                  type="submit"
+                  class="w-full border border-red-200 text-red-600 py-2 px-4 rounded-md hover:bg-red-50 transition"
+                >
+                  Delete Key
+                </button>
+              </form>
+            </div>
+          </div>
+          <p class="text-xs text-gray-500">
+            Regenerating or deleting the key will break SSH access until you update the public key on the remote host.
+          </p>
+          {{else}}
+          <div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between rounded-md border border-amber-200 bg-amber-50 px-4 py-3">
+            <p class="text-sm text-amber-800">
+              No SSH key generated yet. Public HTTPS remotes can still be cloned without one.
+            </p>
+            <form method="POST" action="/user/git-key/generate">
+              <button
+                type="submit"
+                class="bg-gray-900 text-white py-2 px-4 rounded-md hover:bg-gray-800 transition"
+              >
+                Generate SSH Key
+              </button>
+            </form>
+          </div>
+          {{end}}
+        </section>
+
+        <section class="bg-white rounded-lg shadow p-5 space-y-4">
+          <div class="space-y-1">
+            <h3 class="text-lg font-semibold text-gray-800">Clone from Git</h3>
+            <p class="text-sm text-gray-500">
+              Connect a remote repository and create a project from it. SSH remotes use your account-level key above.
+            </p>
+          </div>
+          <form method="POST" action="/projects/clone" class="grid gap-3 lg:grid-cols-2">
+            <input
+              type="text"
+              name="remoteURL"
+              placeholder="git@github.com:org/repo.git or https://github.com/org/repo.git"
+              required
+              class="px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 lg:col-span-2"
+            >
+            <input
+              type="text"
+              name="name"
+              placeholder="Project name (optional)"
+              class="px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+            <input
+              type="text"
+              name="branch"
+              placeholder="Branch (optional, defaults to remote default)"
+              class="px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+            <div class="lg:col-span-2 flex items-center justify-between gap-4">
+              <p class="text-xs text-gray-500">
+                SSH authentication comes from your generated user key. Passphrase-protected keys are not supported yet.
+              </p>
+              <button
+                type="submit"
+                class="bg-gray-900 text-white py-2 px-4 rounded-md hover:bg-gray-800 transition"
+              >
+                Clone Repository
+              </button>
+            </div>
+          </form>
+        </section>
+
         {{if .Projects}}
         <div class="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
           {{range .Projects}}

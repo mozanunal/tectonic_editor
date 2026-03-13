@@ -16,6 +16,7 @@ func main() {
 	dataDir := getEnv("DATA_DIR", "data")
 	tectonicBin := getEnv("TECTONIC_BIN", "tectonic")
 	typstBin := getEnv("TYPST_BIN", "typst")
+	gitBin := getEnv("GIT_BIN", "git")
 
 	dbPath := filepath.Join(dataDir, "latex.db")
 	projectsDir := filepath.Join(dataDir, "projects")
@@ -30,7 +31,7 @@ func main() {
 	}
 	defer database.Close()
 
-	server, err := app.NewServer(database, jwtSecret, projectsDir, tectonicBin, typstBin)
+	server, err := app.NewServer(database, jwtSecret, projectsDir, tectonicBin, typstBin, gitBin)
 	if err != nil {
 		log.Fatal("Failed to create server:", err)
 	}

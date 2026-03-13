@@ -236,6 +236,59 @@
                         </div>
                     </div>
                     <div class="flex-1 overflow-auto p-3 space-y-3">
+                        <div class="rounded border border-gray-700 bg-gray-900/80 p-3 space-y-3">
+                            <div class="flex items-start justify-between gap-3">
+                                <div>
+                                    <p class="text-xs font-semibold text-gray-300 uppercase tracking-wide">Git Sync</p>
+                                    <p id="git-config-summary" class="text-[11px] text-gray-400 mt-1">Not configured</p>
+                                </div>
+                                <span id="git-status-badge" class="rounded bg-gray-700 px-2 py-1 text-[10px] font-medium text-gray-200">Not linked</span>
+                            </div>
+                            <div id="git-status-details" class="space-y-1 text-xs text-gray-300">
+                                <p>Remote: <span id="git-remote-display" class="text-gray-400">Not configured</span></p>
+                                <p>Branch: <span id="git-branch-display" class="text-gray-400">-</span></p>
+                                <p>Last sync: <span id="git-last-sync-display" class="text-gray-400">Never</span></p>
+                                <p>Working tree: <span id="git-working-tree-display" class="text-gray-400">Unavailable</span></p>
+                                <p>Last commit: <span id="git-last-commit-display" class="text-gray-400">Unavailable</span></p>
+                                <p>User key: <span id="git-user-key-display" class="text-gray-400">{{if .UserGitKey}}{{.UserGitKey.Fingerprint}}{{else}}Not generated{{end}}</span></p>
+                            </div>
+                            {{if .CanManageMembers}}
+                            <form id="git-config-form" class="space-y-2">
+                                <input id="git-remote-url" name="remoteURL" type="text"
+                                    placeholder="git@github.com:org/repo.git"
+                                    class="w-full rounded border border-gray-600 bg-gray-950 px-2 py-1.5 text-xs text-gray-100 focus:border-blue-500 focus:outline-none">
+                                <input id="git-branch" name="branch" type="text"
+                                    placeholder="main"
+                                    class="w-full rounded border border-gray-600 bg-gray-950 px-2 py-1.5 text-xs text-gray-100 focus:border-blue-500 focus:outline-none">
+                                <p class="text-[11px] text-gray-500">Authentication uses your account-level SSH key from the home page.</p>
+                                <button id="git-config-save-btn" type="submit"
+                                    class="w-full rounded bg-gray-100 px-3 py-2 text-xs font-medium text-gray-900 hover:bg-white">
+                                    Save Git Settings
+                                </button>
+                            </form>
+                            {{else}}
+                            <p class="text-[11px] text-gray-500">Only owners and admins can change Git settings.</p>
+                            {{end}}
+                            {{if .CanWrite}}
+                            <div class="space-y-2 border-t border-gray-700 pt-3">
+                                <input id="git-commit-message" type="text"
+                                    placeholder="Commit message for push"
+                                    class="w-full rounded border border-gray-600 bg-gray-950 px-2 py-1.5 text-xs text-gray-100 focus:border-blue-500 focus:outline-none">
+                                <div class="grid grid-cols-2 gap-2">
+                                    <button id="git-pull-btn" type="button"
+                                        class="rounded bg-gray-700 px-3 py-2 text-xs font-medium text-white hover:bg-gray-600">
+                                        Pull
+                                    </button>
+                                    <button id="git-push-btn" type="button"
+                                        class="rounded bg-emerald-600 px-3 py-2 text-xs font-medium text-white hover:bg-emerald-500">
+                                        Push
+                                    </button>
+                                </div>
+                            </div>
+                            {{else}}
+                            <p class="text-[11px] text-gray-500">Read-only access cannot pull or push.</p>
+                            {{end}}
+                        </div>
                         <p class="text-xs font-semibold text-gray-300 uppercase tracking-wide">Project Access</p>
                         {{range .ProjectMembers}}
                         <div class="rounded bg-gray-700/60 px-2 py-1.5 text-xs flex items-center justify-between gap-2">
@@ -346,6 +399,7 @@
     const initialStatusMessage = {{printf "%q" .Status}};
     const initialErrorMessage = {{printf "%q" .Error}};
     const initialContent = {{.Content}};
+    const initialCompileTarget = {{printf "%q" .CompileTarget}};
     const MIN_PDF_ZOOM = 0.4;
     const MAX_PDF_ZOOM = 3;
     const MAX_COMMENT_BODY_LENGTH = 2000;
@@ -356,8 +410,9 @@
     const WORKSPACE_VIEW_EDITOR = 'editor';
     const WORKSPACE_VIEW_PDF = 'pdf';
     const WORKSPACE_VIEW_SPLIT = 'split';
+    const initialPrimaryFile = initialCompileTarget || DEFAULT_PRIMARY_FILE;
     let editor;
-    let currentFile = DEFAULT_PRIMARY_FILE;
+    let currentFile = initialPrimaryFile;
     let currentFileIsText = true;
     let currentPreviewURL = null;
     let fileList = [];
@@ -381,13 +436,14 @@
     let suppressEditorChangeTracking = false;
     let pdfResizeTimer = null;
     let comments = [];
-    let commentTarget = { filePath: 'main.tex', startLine: 1, endLine: 1, snippet: '' };
-    let compileTarget = DEFAULT_PRIMARY_FILE;
+    let commentTarget = { filePath: initialPrimaryFile, startLine: 1, endLine: 1, snippet: '' };
+    let compileTarget = initialPrimaryFile;
     let activeSidebarPanel = 'files';
     let isSidebarCollapsed = false;
     let workspaceView = WORKSPACE_VIEW_SPLIT;
+    let gitStatus = { configured: false, repoPresent: false };
 
-    fileContents[DEFAULT_PRIMARY_FILE] = initialContent;
+    fileContents[initialPrimaryFile] = initialContent;
 
     require.config({ paths: { vs: 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.45.0/min/vs' } });
 
@@ -488,6 +544,7 @@
 
         loadFileList();
         loadComments();
+        loadGitStatus(false);
         updateCommentTargetFromEditor(true);
     });
 
@@ -906,6 +963,33 @@
         renderFileList(fileList);
     }
 
+    async function persistCompileTargetSelection(entry, showSuccess = false) {
+        if (!canWrite) {
+            return true;
+        }
+
+        try {
+            const formData = new FormData();
+            formData.append('entry', entry || '');
+            const response = await fetch(`/api/projects/${projectId}/compile-target`, {
+                method: 'POST',
+                body: formData,
+            });
+            if (!response.ok) {
+                const message = (await response.text()).trim() || 'Failed to save main file selection';
+                setStatus(message, true);
+                return false;
+            }
+            if (showSuccess) {
+                setStatus('Main file saved');
+            }
+            return true;
+        } catch (_) {
+            setStatus('Failed to save main file selection', true);
+            return false;
+        }
+    }
+
     function listCompileTargets() {
         return fileList
             .filter(file => !file.isDir && isCompilableFile(file.path))
@@ -950,12 +1034,16 @@
         select.innerHTML = '';
 
         if (!candidates.length) {
+            const previousTarget = compileTarget;
             compileTarget = '';
             select.disabled = true;
             const option = document.createElement('option');
             option.value = '';
             option.textContent = 'No .tex/.typ/.md files';
             select.appendChild(option);
+            if (previousTarget) {
+                void persistCompileTargetSelection('', false);
+            }
             return;
         }
 
@@ -2164,6 +2252,262 @@
         status.className = isError ? 'text-sm text-red-500' : 'text-sm text-gray-500';
     }
 
+    function formatGitTimestamp(value) {
+        if (!value) {
+            return 'Never';
+        }
+
+        const normalized = value.includes('T') ? value : `${value.replace(' ', 'T')}Z`;
+        const parsed = new Date(normalized);
+        if (Number.isNaN(parsed.getTime())) {
+            return value;
+        }
+        return parsed.toLocaleString();
+    }
+
+    function setElementDisabled(element, disabled) {
+        if (!element) {
+            return;
+        }
+        element.disabled = disabled;
+        element.classList.toggle('opacity-50', disabled);
+        element.classList.toggle('cursor-not-allowed', disabled);
+    }
+
+    function setGitBadge(text, tone = 'neutral') {
+        const badge = document.getElementById('git-status-badge');
+        badge.textContent = text;
+
+        const toneClasses = {
+            neutral: 'rounded bg-gray-700 px-2 py-1 text-[10px] font-medium text-gray-200',
+            success: 'rounded bg-emerald-600/20 px-2 py-1 text-[10px] font-medium text-emerald-200',
+            warning: 'rounded bg-amber-500/20 px-2 py-1 text-[10px] font-medium text-amber-200',
+            error: 'rounded bg-red-500/20 px-2 py-1 text-[10px] font-medium text-red-200',
+        };
+        badge.className = toneClasses[tone] || toneClasses.neutral;
+    }
+
+    function isSSHRemoteURL(value) {
+        const normalized = (value || '').trim().toLowerCase();
+        if (normalized.startsWith('ssh://')) {
+            return true;
+        }
+        return normalized.includes('@') && normalized.includes(':') && !normalized.includes('://');
+    }
+
+    function updateGitUI(nextStatus) {
+        gitStatus = nextStatus || { configured: false, repoPresent: false };
+
+        const configured = !!gitStatus.configured;
+        const repoPresent = !!gitStatus.repoPresent;
+        const hasChanges = !!gitStatus.hasUncommittedChanges;
+        const changedFiles = Number(gitStatus.changedFiles || 0);
+        const hasSSHKey = !!gitStatus.hasSSHKey;
+        const needsSSHKey = configured && isSSHRemoteURL(gitStatus.remoteURL || '');
+        const missingSSHKey = needsSSHKey && !hasSSHKey;
+
+        let summary = 'Not configured for Git sync.';
+        let workingTree = 'Unavailable';
+        let lastCommit = 'Unavailable';
+
+        if (!configured) {
+            setGitBadge('Not linked', 'neutral');
+        } else if (missingSSHKey) {
+            summary = 'This project uses an SSH remote. Generate your account SSH key on the home page before syncing.';
+            workingTree = repoPresent ? (hasChanges
+                ? `${changedFiles} uncommitted change${changedFiles === 1 ? '' : 's'}`
+                : 'Clean') : 'Unavailable';
+            lastCommit = gitStatus.lastCommit || 'Unavailable';
+            setGitBadge('SSH key required', 'error');
+        } else if (!repoPresent) {
+            summary = 'Git settings exist, but the local repository is missing.';
+            workingTree = 'Repository missing';
+            lastCommit = gitStatus.lastCommit || 'Unavailable';
+            setGitBadge('Repo missing', 'error');
+        } else {
+            summary = `Tracking ${gitStatus.branch || 'current branch'} on origin.`;
+            if (gitStatus.currentBranch && gitStatus.branch && gitStatus.currentBranch !== gitStatus.branch) {
+                summary += ` Current checkout: ${gitStatus.currentBranch}.`;
+            }
+            workingTree = hasChanges
+                ? `${changedFiles} uncommitted change${changedFiles === 1 ? '' : 's'}`
+                : 'Clean';
+            lastCommit = gitStatus.lastCommit || 'No commits yet';
+            setGitBadge(hasChanges ? 'Local changes' : 'Connected', hasChanges ? 'warning' : 'success');
+        }
+
+        document.getElementById('git-config-summary').textContent = summary;
+        document.getElementById('git-remote-display').textContent = configured ? (gitStatus.remoteURL || '-') : 'Not configured';
+        document.getElementById('git-branch-display').textContent = configured ? (gitStatus.branch || '-') : '-';
+        document.getElementById('git-last-sync-display').textContent = configured ? formatGitTimestamp(gitStatus.lastSync) : 'Never';
+        document.getElementById('git-working-tree-display').textContent = workingTree;
+        document.getElementById('git-last-commit-display').textContent = lastCommit;
+        document.getElementById('git-user-key-display').textContent = hasSSHKey
+            ? (gitStatus.sshKeyFingerprint || 'Available')
+            : 'Not generated';
+
+        const remoteInput = document.getElementById('git-remote-url');
+        if (remoteInput && document.activeElement !== remoteInput) {
+            remoteInput.value = configured ? (gitStatus.remoteURL || '') : '';
+        }
+
+        const branchInput = document.getElementById('git-branch');
+        if (branchInput && document.activeElement !== branchInput) {
+            branchInput.value = configured ? (gitStatus.branch || '') : '';
+        }
+
+        setElementDisabled(document.getElementById('git-pull-btn'), !canWrite || !configured || !repoPresent || hasChanges || missingSSHKey);
+        setElementDisabled(document.getElementById('git-push-btn'), !canWrite || !configured || missingSSHKey);
+    }
+
+    async function loadGitStatus(showFailure = true) {
+        try {
+            const response = await fetch(`/api/projects/${projectId}/git/status`);
+            if (!response.ok) {
+                const message = (await response.text()).trim() || 'Failed to load Git status';
+                if (showFailure) {
+                    setStatus(message, true);
+                }
+                return;
+            }
+
+            updateGitUI(await response.json());
+        } catch (_) {
+            if (showFailure) {
+                setStatus('Failed to load Git status', true);
+            }
+        }
+    }
+
+    async function reloadWorkspaceFromDisk(preferredFile = '') {
+        const targetFile = preferredFile || currentFile;
+        clearFilePreview();
+        fileContents = {};
+        unsavedChanges = {};
+        currentFile = '';
+        currentFileIsText = true;
+
+        await loadFileList();
+        if (targetFile && filesByPath[targetFile] && !filesByPath[targetFile].isDir) {
+            await openFile(targetFile);
+        }
+    }
+
+    async function saveGitConfig(event) {
+        event.preventDefault();
+
+        const form = document.getElementById('git-config-form');
+        if (!form) {
+            return;
+        }
+
+        const saveButton = document.getElementById('git-config-save-btn');
+        const formData = new FormData(form);
+        setElementDisabled(saveButton, true);
+        setStatus('Saving Git settings...');
+
+        try {
+            const response = await fetch(`/api/projects/${projectId}/git/config`, {
+                method: 'POST',
+                body: formData,
+            });
+            if (!response.ok) {
+                const message = (await response.text()).trim() || 'Failed to save Git settings';
+                setStatus(message, true);
+                return;
+            }
+
+            const payload = await response.json();
+            await loadGitStatus(false);
+            setStatus(payload.status || 'Git sync settings saved');
+        } catch (_) {
+            setStatus('Failed to save Git settings', true);
+        } finally {
+            setElementDisabled(saveButton, false);
+        }
+    }
+
+    async function gitPull() {
+        if (!gitStatus.configured) {
+            setStatus('Configure Git sync before pulling', true);
+            return;
+        }
+        if (Object.keys(unsavedChanges).length > 0) {
+            setStatus('Save and push or discard editor changes before pulling', true);
+            return;
+        }
+
+        const pullButton = document.getElementById('git-pull-btn');
+        setElementDisabled(pullButton, true);
+        setStatus('Pulling latest changes...');
+
+        try {
+            const response = await fetch(`/api/projects/${projectId}/git/pull`, {
+                method: 'POST',
+            });
+            if (!response.ok) {
+                const message = (await response.text()).trim() || 'Failed to pull latest changes';
+                setStatus(message, true);
+                return;
+            }
+
+            const payload = await response.json();
+            const preferredFile = currentFile;
+            await reloadWorkspaceFromDisk(preferredFile);
+            await loadComments();
+            await loadGitStatus(false);
+            setStatus(payload.status || 'Pulled latest changes');
+        } catch (_) {
+            setStatus('Failed to pull latest changes', true);
+        } finally {
+            updateGitUI(gitStatus);
+        }
+    }
+
+    async function gitPush() {
+        if (!gitStatus.configured) {
+            setStatus('Configure Git sync before pushing', true);
+            return;
+        }
+
+        const pushButton = document.getElementById('git-push-btn');
+        setElementDisabled(pushButton, true);
+        setStatus('Saving and pushing changes...');
+
+        try {
+            if (!await saveAll()) {
+                return;
+            }
+
+            const formData = new FormData();
+            const commitMessage = document.getElementById('git-commit-message');
+            if (commitMessage && commitMessage.value.trim()) {
+                formData.append('commitMessage', commitMessage.value.trim());
+            }
+
+            const response = await fetch(`/api/projects/${projectId}/git/push`, {
+                method: 'POST',
+                body: formData,
+            });
+            if (!response.ok) {
+                const message = (await response.text()).trim() || 'Failed to push changes';
+                setStatus(message, true);
+                return;
+            }
+
+            const payload = await response.json();
+            if (commitMessage) {
+                commitMessage.value = '';
+            }
+            await loadGitStatus(false);
+            setStatus(payload.status || 'Pushed changes to remote');
+        } catch (_) {
+            setStatus('Failed to push changes', true);
+        } finally {
+            updateGitUI(gitStatus);
+        }
+    }
+
     function parseDownloadFilename(contentDisposition) {
         if (!contentDisposition) {
             return '';
@@ -2784,8 +3128,9 @@
     document.getElementById('view-editor-btn').addEventListener('click', () => applyWorkspaceView(WORKSPACE_VIEW_EDITOR));
     document.getElementById('view-pdf-btn').addEventListener('click', () => applyWorkspaceView(WORKSPACE_VIEW_PDF));
     document.getElementById('view-split-btn').addEventListener('click', () => applyWorkspaceView(WORKSPACE_VIEW_SPLIT));
-    document.getElementById('compile-target').addEventListener('change', (event) => {
+    document.getElementById('compile-target').addEventListener('change', async (event) => {
         compileTarget = event.target.value;
+        await persistCompileTargetSelection(compileTarget, true);
     });
     document.getElementById('compile-btn').addEventListener('click', compile);
     document.getElementById('sidebar-files-btn').addEventListener('click', () => selectSidebarPanel('files'));
@@ -2793,7 +3138,20 @@
     document.getElementById('sidebar-settings-btn').addEventListener('click', () => selectSidebarPanel('settings'));
     document.getElementById('sidebar-collapse-btn').addEventListener('click', toggleSidebarCollapsed);
     applyWritePermissions();
+    updateGitUI(gitStatus);
     setSaveEnabled(canWrite);
+    const gitConfigForm = document.getElementById('git-config-form');
+    if (gitConfigForm) {
+        gitConfigForm.addEventListener('submit', saveGitConfig);
+    }
+    const gitPullButton = document.getElementById('git-pull-btn');
+    if (gitPullButton) {
+        gitPullButton.addEventListener('click', gitPull);
+    }
+    const gitPushButton = document.getElementById('git-push-btn');
+    if (gitPushButton) {
+        gitPushButton.addEventListener('click', gitPush);
+    }
     document.getElementById('comment-scope-all').addEventListener('change', renderCommentList);
     document.getElementById('comment-use-selection-btn').addEventListener('click', () => updateCommentTargetFromEditor(true));
     document.getElementById('comment-add-btn').addEventListener('click', addComment);
