@@ -33,18 +33,19 @@ type userGitKeyRecord struct {
 }
 
 type GitStatusResponse struct {
-	Configured            bool   `json:"configured"`
-	ProjectID             string `json:"projectId"`
-	RemoteURL             string `json:"remoteURL"`
-	Branch                string `json:"branch"`
-	HasSSHKey             bool   `json:"hasSSHKey"`
-	SSHKeyFingerprint     string `json:"sshKeyFingerprint"`
-	LastSync              string `json:"lastSync"`
-	RepoPresent           bool   `json:"repoPresent"`
-	CurrentBranch         string `json:"currentBranch"`
-	HasUncommittedChanges bool   `json:"hasUncommittedChanges"`
-	ChangedFiles          int    `json:"changedFiles"`
-	LastCommit            string `json:"lastCommit"`
+	Configured            bool     `json:"configured"`
+	ProjectID             string   `json:"projectId"`
+	RemoteURL             string   `json:"remoteURL"`
+	Branch                string   `json:"branch"`
+	HasSSHKey             bool     `json:"hasSSHKey"`
+	SSHKeyFingerprint     string   `json:"sshKeyFingerprint"`
+	LastSync              string   `json:"lastSync"`
+	RepoPresent           bool     `json:"repoPresent"`
+	CurrentBranch         string   `json:"currentBranch"`
+	HasUncommittedChanges bool     `json:"hasUncommittedChanges"`
+	ChangedFiles          int      `json:"changedFiles"`
+	ChangedFileNames      []string `json:"changedFileNames"`
+	LastCommit            string   `json:"lastCommit"`
 }
 
 func (s *Server) handleGenerateUserGitKey(w http.ResponseWriter, r *http.Request) {
@@ -228,6 +229,7 @@ func (s *Server) handleGitStatus(w http.ResponseWriter, r *http.Request) {
 		CurrentBranch:         repoStatus.CurrentBranch,
 		HasUncommittedChanges: repoStatus.HasUncommittedChanges,
 		ChangedFiles:          repoStatus.ChangedFiles,
+		ChangedFileNames:      repoStatus.ChangedFileNames,
 		LastCommit:            repoStatus.LastCommit,
 	})
 }
@@ -405,6 +407,36 @@ func (s *Server) handleGitPush(w http.ResponseWriter, r *http.Request) {
 		"status":        statusMessage,
 		"commitCreated": pushResult.CommitCreated,
 		"commitHash":    pushResult.CommitHash,
+	})
+}
+
+func (s *Server) handleGitReset(w http.ResponseWriter, r *http.Request) {
+	access, ok := s.requireProjectAccess(w, r, projectAccessWrite)
+	if !ok {
+		return
+	}
+
+	cfg, err := s.getProjectGitConfig(access.ProjectID)
+	if err == sql.ErrNoRows {
+		http.Error(w, "Git sync is not configured for this project", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		http.Error(w, "Failed to load Git configuration", http.StatusInternalServerError)
+		return
+	}
+	_ = cfg
+
+	if err := s.git.Reset(r.Context(), filepath.Join(s.projectsDir, access.ProjectID)); err != nil {
+		http.Error(w, renderGitError(err), http.StatusBadRequest)
+		return
+	}
+
+	s.touchProject(access.ProjectID)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"status": "Discarded all local changes",
 	})
 }
 

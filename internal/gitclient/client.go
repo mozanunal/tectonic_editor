@@ -71,6 +71,7 @@ type RepoStatus struct {
 	CurrentBranch         string
 	HasUncommittedChanges bool
 	ChangedFiles          int
+	ChangedFileNames      []string
 	LastCommit            string
 }
 
@@ -183,8 +184,9 @@ func (c *Client) Status(ctx context.Context, repoDir string) (RepoStatus, error)
 	if err != nil {
 		return RepoStatus{}, err
 	}
-	for range lines {
+	for _, line := range lines {
 		status.ChangedFiles++
+		status.ChangedFileNames = append(status.ChangedFileNames, line)
 	}
 	status.HasUncommittedChanges = status.ChangedFiles > 0
 
@@ -222,6 +224,22 @@ func (c *Client) SwitchBranch(ctx context.Context, repoDir string, branch string
 
 	_, err = c.run(ctx, repoDir, Auth{}, nil, "checkout", "-B", branch)
 	return err
+}
+
+func (c *Client) Reset(ctx context.Context, repoDir string) error {
+	if !c.IsRepo(ctx, repoDir) {
+		return errors.New("project repository is not initialized")
+	}
+	if !c.hasCommit(ctx, repoDir) {
+		return errors.New("no commits to reset to")
+	}
+	if _, err := c.run(ctx, repoDir, Auth{}, nil, "checkout", "--", "."); err != nil {
+		return err
+	}
+	if _, err := c.run(ctx, repoDir, Auth{}, nil, "clean", "-fd"); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (c *Client) Pull(ctx context.Context, opts SyncOptions) error {

@@ -62,7 +62,14 @@
               <div class="text-xs text-gray-500">
                 <span class="font-medium text-gray-700">Fingerprint:</span> {{.UserGitKey.Fingerprint}}
               </div>
-              <label class="block text-xs font-medium text-gray-700">Public Key</label>
+              <div class="flex items-center justify-between">
+                <label class="block text-xs font-medium text-gray-700">Public Key</label>
+                <button
+                  type="button"
+                  onclick="(function(btn){var ta=btn.closest('.space-y-2').querySelector('textarea');navigator.clipboard.writeText(ta.value.trim()).then(function(){btn.textContent='Copied!';setTimeout(function(){btn.textContent='Copy'},2000)}).catch(function(){btn.textContent='Failed'})})(this)"
+                  class="text-xs text-blue-600 hover:text-blue-800 font-medium"
+                >Copy</button>
+              </div>
               <textarea
                 readonly
                 rows="4"

@@ -72,7 +72,7 @@
 </head>
 <body class="bg-gray-100">
 <div class="h-screen flex flex-col">
-    <nav class="bg-white shadow h-12 flex-shrink-0 z-10">
+    <nav class="bg-white shadow h-12 flex-shrink-0 z-50">
         <div class="h-full px-4 flex justify-between items-center">
             <div class="flex items-center gap-3">
                 <a href="/" class="inline-flex items-center gap-1.5 text-gray-500 hover:text-gray-700" aria-label="Back to projects">
@@ -159,6 +159,12 @@
                         <path fill-rule="evenodd" d="M10 2c-2.236 0-4.43.18-6.57.524C1.993 2.755 1 4.014 1 5.426v5.148c0 1.413.993 2.67 2.43 2.902 1.168.188 2.352.327 3.55.414.28.02.521.18.642.413l1.713 3.293a.75.75 0 0 0 1.33 0l1.713-3.293a.783.783 0 0 1 .642-.413 41.102 41.102 0 0 0 3.55-.414c1.437-.231 2.43-1.49 2.43-2.902V5.426c0-1.413-.993-2.67-2.43-2.902A41.289 41.289 0 0 0 10 2ZM6.75 6a.75.75 0 0 0 0 1.5h6.5a.75.75 0 0 0 0-1.5h-6.5Zm0 2.5a.75.75 0 0 0 0 1.5h3.5a.75.75 0 0 0 0-1.5h-3.5Z" clip-rule="evenodd" />
                     </svg>
                 </button>
+                <button id="sidebar-git-btn" type="button"
+                    class="h-9 w-9 rounded flex items-center justify-center text-gray-200 hover:bg-gray-700" aria-pressed="false" title="Git Sync">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                        <path fill-rule="evenodd" d="M15 1.5A2.5 2.5 0 0 0 12.5 4c0 .512.155.988.42 1.384l-2.86 3.575a2.474 2.474 0 0 0-.56-.065c-.245 0-.482.036-.705.103L6.59 6.29A2.5 2.5 0 1 0 4 4.5c0 .512.155.988.42 1.384L2.024 9.472A2.5 2.5 0 1 0 4.5 14c.245 0 .482-.036.705-.103l2.205 2.707A2.5 2.5 0 1 0 10 14.5c0-.512-.155-.988-.42-1.384l2.86-3.575c.178.042.364.065.56.065.245 0 .482-.036.705-.103l2.205 2.707A2.5 2.5 0 1 0 18 9.5a2.5 2.5 0 0 0-2.5-2.5c-.245 0-.482.036-.705.103L12.59 4.396A2.488 2.488 0 0 0 13 3.5 2.5 2.5 0 0 0 15 1.5ZM14.5 4a1 1 0 1 1-2 0 1 1 0 0 1 2 0Z" clip-rule="evenodd" />
+                    </svg>
+                </button>
                 <button id="sidebar-settings-btn" type="button"
                     class="h-9 w-9 rounded flex items-center justify-center text-gray-200 hover:bg-gray-700" aria-pressed="false" title="Settings">
                     <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
@@ -223,6 +229,88 @@
                     <div id="comment-list" class="flex-1 overflow-auto p-3 space-y-2"></div>
                 </div>
 
+                <div id="sidebar-panel-git" class="hidden h-full bg-gray-800 text-gray-100 flex flex-col">
+                    <div class="p-3 border-b border-gray-700">
+                        <div class="flex items-center justify-between">
+                            <h3 class="text-sm font-semibold text-gray-100">Git Sync</h3>
+                            <span id="git-status-badge" class="rounded bg-gray-700 px-2 py-1 text-[10px] font-medium text-gray-200">Not linked</span>
+                        </div>
+                        <p id="git-config-summary" class="text-[11px] text-gray-400 mt-1">Not configured</p>
+                    </div>
+                    <div class="flex-1 overflow-auto">
+                        {{if .CanWrite}}
+                        <div class="p-3 space-y-2 border-b border-gray-700">
+                            <input id="git-commit-message" type="text"
+                                placeholder="Commit message (optional)"
+                                class="w-full rounded border border-gray-600 bg-gray-950 px-2 py-1.5 text-xs text-gray-100 focus:border-blue-500 focus:outline-none">
+                            <div class="grid grid-cols-3 gap-2">
+                                <button id="git-pull-btn" type="button"
+                                    class="rounded bg-gray-700 px-3 py-2 text-xs font-medium text-white hover:bg-gray-600 inline-flex items-center justify-center gap-1.5">
+                                    <svg id="git-pull-spinner" class="hidden animate-spin h-3 w-3" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                                    <span>Pull</span>
+                                </button>
+                                <button id="git-push-btn" type="button"
+                                    class="rounded bg-emerald-600 px-3 py-2 text-xs font-medium text-white hover:bg-emerald-500 inline-flex items-center justify-center gap-1.5">
+                                    <svg id="git-push-spinner" class="hidden animate-spin h-3 w-3" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                                    <span>Push</span>
+                                </button>
+                                <button id="git-reset-btn" type="button"
+                                    class="rounded bg-red-700/60 px-3 py-2 text-xs font-medium text-white hover:bg-red-600 inline-flex items-center justify-center gap-1.5">
+                                    <svg id="git-reset-spinner" class="hidden animate-spin h-3 w-3" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                                    <span>Reset</span>
+                                </button>
+                            </div>
+                            <p id="git-pull-disabled-hint" class="hidden text-[11px] text-amber-400">Commit or push changes before pulling.</p>
+                        </div>
+                        {{else}}
+                        <div class="p-3 border-b border-gray-700">
+                            <p class="text-[11px] text-gray-500">Read-only access cannot pull or push.</p>
+                        </div>
+                        {{end}}
+                        <div id="git-feedback" class="hidden mx-3 mt-3 rounded px-3 py-2 text-xs font-medium"></div>
+                        <div class="p-3 space-y-1 text-xs text-gray-300 border-b border-gray-700">
+                            <p>Remote: <span id="git-remote-display" class="text-gray-400">Not configured</span></p>
+                            <p>Branch: <span id="git-branch-display" class="text-gray-400">-</span></p>
+                            <p>Last sync: <span id="git-last-sync-display" class="text-gray-400">Never</span></p>
+                            <p>Working tree: <span id="git-working-tree-display" class="text-gray-400">Unavailable</span></p>
+                            <p>Last commit: <span id="git-last-commit-display" class="text-gray-400">Unavailable</span></p>
+                            <p>User key: <span id="git-user-key-display" class="text-gray-400">{{if .UserGitKey}}{{.UserGitKey.Fingerprint}}{{else}}Not generated{{end}}</span></p>
+                        </div>
+                        <div class="p-3 border-b border-gray-700">
+                            <button id="git-changed-files-toggle" type="button" class="flex items-center gap-1 text-xs font-semibold text-gray-300 uppercase tracking-wide w-full">
+                                <svg id="git-changed-files-chevron" class="h-3 w-3 transition-transform" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
+                                    <path fill-rule="evenodd" d="M8.22 5.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.75.75 0 0 1-1.06-1.06L11.94 10 8.22 6.28a.75.75 0 0 1 0-1.06Z" clip-rule="evenodd" />
+                                </svg>
+                                Changed Files <span id="git-changed-files-count" class="text-gray-500">(0)</span>
+                            </button>
+                            <div id="git-changed-files-list" class="hidden mt-2 space-y-1"></div>
+                        </div>
+                        {{if .CanManageMembers}}
+                        <div class="p-3">
+                            <button id="git-config-toggle" type="button" class="flex items-center gap-1 text-xs font-semibold text-gray-300 uppercase tracking-wide w-full">
+                                <svg id="git-config-chevron" class="h-3 w-3 transition-transform" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
+                                    <path fill-rule="evenodd" d="M8.22 5.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.75.75 0 0 1-1.06-1.06L11.94 10 8.22 6.28a.75.75 0 0 1 0-1.06Z" clip-rule="evenodd" />
+                                </svg>
+                                Configuration
+                            </button>
+                            <form id="git-config-form" class="hidden mt-2 space-y-2">
+                                <input id="git-remote-url" name="remoteURL" type="text"
+                                    placeholder="git@github.com:org/repo.git"
+                                    class="w-full rounded border border-gray-600 bg-gray-950 px-2 py-1.5 text-xs text-gray-100 focus:border-blue-500 focus:outline-none">
+                                <input id="git-branch" name="branch" type="text"
+                                    placeholder="main"
+                                    class="w-full rounded border border-gray-600 bg-gray-950 px-2 py-1.5 text-xs text-gray-100 focus:border-blue-500 focus:outline-none">
+                                <p class="text-[11px] text-gray-500">Authentication uses your account-level SSH key from the home page.</p>
+                                <button id="git-config-save-btn" type="submit"
+                                    class="w-full rounded bg-gray-100 px-3 py-2 text-xs font-medium text-gray-900 hover:bg-white">
+                                    Save Git Settings
+                                </button>
+                            </form>
+                        </div>
+                        {{end}}
+                    </div>
+                </div>
+
                 <div id="sidebar-panel-settings" class="hidden h-full bg-gray-800 text-gray-100 flex flex-col">
                     <div class="p-3 space-y-4 border-b border-gray-700">
                         <h3 class="text-sm font-semibold text-gray-100">Settings</h3>
@@ -236,59 +324,6 @@
                         </div>
                     </div>
                     <div class="flex-1 overflow-auto p-3 space-y-3">
-                        <div class="rounded border border-gray-700 bg-gray-900/80 p-3 space-y-3">
-                            <div class="flex items-start justify-between gap-3">
-                                <div>
-                                    <p class="text-xs font-semibold text-gray-300 uppercase tracking-wide">Git Sync</p>
-                                    <p id="git-config-summary" class="text-[11px] text-gray-400 mt-1">Not configured</p>
-                                </div>
-                                <span id="git-status-badge" class="rounded bg-gray-700 px-2 py-1 text-[10px] font-medium text-gray-200">Not linked</span>
-                            </div>
-                            <div id="git-status-details" class="space-y-1 text-xs text-gray-300">
-                                <p>Remote: <span id="git-remote-display" class="text-gray-400">Not configured</span></p>
-                                <p>Branch: <span id="git-branch-display" class="text-gray-400">-</span></p>
-                                <p>Last sync: <span id="git-last-sync-display" class="text-gray-400">Never</span></p>
-                                <p>Working tree: <span id="git-working-tree-display" class="text-gray-400">Unavailable</span></p>
-                                <p>Last commit: <span id="git-last-commit-display" class="text-gray-400">Unavailable</span></p>
-                                <p>User key: <span id="git-user-key-display" class="text-gray-400">{{if .UserGitKey}}{{.UserGitKey.Fingerprint}}{{else}}Not generated{{end}}</span></p>
-                            </div>
-                            {{if .CanManageMembers}}
-                            <form id="git-config-form" class="space-y-2">
-                                <input id="git-remote-url" name="remoteURL" type="text"
-                                    placeholder="git@github.com:org/repo.git"
-                                    class="w-full rounded border border-gray-600 bg-gray-950 px-2 py-1.5 text-xs text-gray-100 focus:border-blue-500 focus:outline-none">
-                                <input id="git-branch" name="branch" type="text"
-                                    placeholder="main"
-                                    class="w-full rounded border border-gray-600 bg-gray-950 px-2 py-1.5 text-xs text-gray-100 focus:border-blue-500 focus:outline-none">
-                                <p class="text-[11px] text-gray-500">Authentication uses your account-level SSH key from the home page.</p>
-                                <button id="git-config-save-btn" type="submit"
-                                    class="w-full rounded bg-gray-100 px-3 py-2 text-xs font-medium text-gray-900 hover:bg-white">
-                                    Save Git Settings
-                                </button>
-                            </form>
-                            {{else}}
-                            <p class="text-[11px] text-gray-500">Only owners and admins can change Git settings.</p>
-                            {{end}}
-                            {{if .CanWrite}}
-                            <div class="space-y-2 border-t border-gray-700 pt-3">
-                                <input id="git-commit-message" type="text"
-                                    placeholder="Commit message for push"
-                                    class="w-full rounded border border-gray-600 bg-gray-950 px-2 py-1.5 text-xs text-gray-100 focus:border-blue-500 focus:outline-none">
-                                <div class="grid grid-cols-2 gap-2">
-                                    <button id="git-pull-btn" type="button"
-                                        class="rounded bg-gray-700 px-3 py-2 text-xs font-medium text-white hover:bg-gray-600">
-                                        Pull
-                                    </button>
-                                    <button id="git-push-btn" type="button"
-                                        class="rounded bg-emerald-600 px-3 py-2 text-xs font-medium text-white hover:bg-emerald-500">
-                                        Push
-                                    </button>
-                                </div>
-                            </div>
-                            {{else}}
-                            <p class="text-[11px] text-gray-500">Read-only access cannot pull or push.</p>
-                            {{end}}
-                        </div>
                         <p class="text-xs font-semibold text-gray-300 uppercase tracking-wide">Project Access</p>
                         {{range .ProjectMembers}}
                         <div class="rounded bg-gray-700/60 px-2 py-1.5 text-xs flex items-center justify-between gap-2">
@@ -350,6 +385,7 @@
                 </div>
                 <div id="pdf-compile-stat" class="hidden pointer-events-none absolute bottom-3 right-3 rounded bg-black/70 px-2 py-1 text-xs text-white">Compile: --</div>
             </div>
+
         </div>
     </div>
 
@@ -1224,7 +1260,7 @@
     function readStoredSidebarPanel() {
         try {
             const value = localStorage.getItem(SIDEBAR_PANEL_STORAGE_KEY);
-            if (value === 'files' || value === 'comments' || value === 'settings') {
+            if (value === 'files' || value === 'comments' || value === 'git' || value === 'settings') {
                 return value;
             }
         } catch (_) {}
@@ -1313,15 +1349,17 @@
     }
 
     function applySidebarPanel(panel, persist = true) {
-        const normalized = (panel === 'files' || panel === 'comments' || panel === 'settings') ? panel : 'files';
+        const normalized = (panel === 'files' || panel === 'comments' || panel === 'git' || panel === 'settings') ? panel : 'files';
         activeSidebarPanel = normalized;
 
         document.getElementById('sidebar-panel-files').classList.toggle('hidden', normalized !== 'files');
         document.getElementById('sidebar-panel-comments').classList.toggle('hidden', normalized !== 'comments');
+        document.getElementById('sidebar-panel-git').classList.toggle('hidden', normalized !== 'git');
         document.getElementById('sidebar-panel-settings').classList.toggle('hidden', normalized !== 'settings');
 
         setSidebarButtonState(document.getElementById('sidebar-files-btn'), normalized === 'files');
         setSidebarButtonState(document.getElementById('sidebar-comments-btn'), normalized === 'comments');
+        setSidebarButtonState(document.getElementById('sidebar-git-btn'), normalized === 'git');
         setSidebarButtonState(document.getElementById('sidebar-settings-btn'), normalized === 'settings');
 
         if (persist) {
@@ -1899,6 +1937,7 @@
                 delete unsavedChanges[currentFile];
                 updateFileList();
                 setStatus('Saved');
+                loadGitStatus(false);
             } else {
                 setStatus('Save failed', true);
             }
@@ -2287,6 +2326,63 @@
         badge.className = toneClasses[tone] || toneClasses.neutral;
     }
 
+    let gitFeedbackTimer = null;
+
+    function escapeHTML(str) {
+        const div = document.createElement('div');
+        div.appendChild(document.createTextNode(str));
+        return div.innerHTML;
+    }
+
+    function showGitFeedback(message, isError = false) {
+        const el = document.getElementById('git-feedback');
+        if (!el) return;
+        el.textContent = message;
+        el.className = isError
+            ? 'mx-3 mt-3 rounded px-3 py-2 text-xs font-medium bg-red-500/20 text-red-200 border border-red-500/30'
+            : 'mx-3 mt-3 rounded px-3 py-2 text-xs font-medium bg-emerald-500/20 text-emerald-200 border border-emerald-500/30';
+        el.classList.remove('hidden');
+        if (gitFeedbackTimer) clearTimeout(gitFeedbackTimer);
+        gitFeedbackTimer = setTimeout(() => {
+            el.classList.add('hidden');
+            gitFeedbackTimer = null;
+        }, 4000);
+    }
+
+    function renderChangedFiles(fileNames) {
+        const list = document.getElementById('git-changed-files-list');
+        const countEl = document.getElementById('git-changed-files-count');
+        if (!list || !countEl) return;
+
+        const names = fileNames || [];
+        countEl.textContent = `(${names.length})`;
+
+        if (names.length === 0) {
+            list.innerHTML = '<p class="text-[11px] text-gray-500">No changed files.</p>';
+            return;
+        }
+
+        const statusColors = {
+            'M': 'text-amber-400',
+            'A': 'text-emerald-400',
+            'D': 'text-red-400',
+            '?': 'text-blue-400',
+            'R': 'text-purple-400',
+        };
+
+        let html = '';
+        for (const entry of names) {
+            const code = entry.substring(0, 2).trim() || '?';
+            const name = entry.length > 3 ? entry.substring(3) : entry.substring(2).trim();
+            const colorClass = statusColors[code.charAt(0)] || statusColors[code.charAt(1)] || 'text-gray-400';
+            html += `<div class="flex items-center gap-2 text-xs">
+                <span class="${colorClass} font-mono font-bold w-4 shrink-0">${escapeHTML(code)}</span>
+                <span class="text-gray-300 truncate">${escapeHTML(name)}</span>
+            </div>`;
+        }
+        list.innerHTML = html;
+    }
+
     function isSSHRemoteURL(value) {
         const normalized = (value || '').trim().toLowerCase();
         if (normalized.startsWith('ssh://')) {
@@ -2356,8 +2452,17 @@
             branchInput.value = configured ? (gitStatus.branch || '') : '';
         }
 
-        setElementDisabled(document.getElementById('git-pull-btn'), !canWrite || !configured || !repoPresent || hasChanges || missingSSHKey);
+        const pullDisabled = !canWrite || !configured || !repoPresent || hasChanges || missingSSHKey;
+        setElementDisabled(document.getElementById('git-pull-btn'), pullDisabled);
         setElementDisabled(document.getElementById('git-push-btn'), !canWrite || !configured || missingSSHKey);
+        setElementDisabled(document.getElementById('git-reset-btn'), !canWrite || !configured || !repoPresent || !hasChanges);
+
+        const pullHint = document.getElementById('git-pull-disabled-hint');
+        if (pullHint) {
+            pullHint.classList.toggle('hidden', !pullDisabled || !configured || !repoPresent || missingSSHKey);
+        }
+
+        renderChangedFiles(gitStatus.changedFileNames);
     }
 
     async function loadGitStatus(showFailure = true) {
@@ -2429,17 +2534,18 @@
 
     async function gitPull() {
         if (!gitStatus.configured) {
-            setStatus('Configure Git sync before pulling', true);
+            showGitFeedback('Configure Git sync before pulling.', true);
             return;
         }
         if (Object.keys(unsavedChanges).length > 0) {
-            setStatus('Save and push or discard editor changes before pulling', true);
+            showGitFeedback('Save and push or discard editor changes before pulling.', true);
             return;
         }
 
         const pullButton = document.getElementById('git-pull-btn');
+        const pullSpinner = document.getElementById('git-pull-spinner');
         setElementDisabled(pullButton, true);
-        setStatus('Pulling latest changes...');
+        if (pullSpinner) pullSpinner.classList.remove('hidden');
 
         try {
             const response = await fetch(`/api/projects/${projectId}/git/pull`, {
@@ -2447,7 +2553,7 @@
             });
             if (!response.ok) {
                 const message = (await response.text()).trim() || 'Failed to pull latest changes';
-                setStatus(message, true);
+                showGitFeedback(message, true);
                 return;
             }
 
@@ -2456,23 +2562,25 @@
             await reloadWorkspaceFromDisk(preferredFile);
             await loadComments();
             await loadGitStatus(false);
-            setStatus(payload.status || 'Pulled latest changes');
+            showGitFeedback(payload.status || 'Pulled latest changes');
         } catch (_) {
-            setStatus('Failed to pull latest changes', true);
+            showGitFeedback('Failed to pull latest changes.', true);
         } finally {
+            if (pullSpinner) pullSpinner.classList.add('hidden');
             updateGitUI(gitStatus);
         }
     }
 
     async function gitPush() {
         if (!gitStatus.configured) {
-            setStatus('Configure Git sync before pushing', true);
+            showGitFeedback('Configure Git sync before pushing.', true);
             return;
         }
 
         const pushButton = document.getElementById('git-push-btn');
+        const pushSpinner = document.getElementById('git-push-spinner');
         setElementDisabled(pushButton, true);
-        setStatus('Saving and pushing changes...');
+        if (pushSpinner) pushSpinner.classList.remove('hidden');
 
         try {
             if (!await saveAll()) {
@@ -2491,7 +2599,7 @@
             });
             if (!response.ok) {
                 const message = (await response.text()).trim() || 'Failed to push changes';
-                setStatus(message, true);
+                showGitFeedback(message, true);
                 return;
             }
 
@@ -2500,10 +2608,48 @@
                 commitMessage.value = '';
             }
             await loadGitStatus(false);
-            setStatus(payload.status || 'Pushed changes to remote');
+            showGitFeedback(payload.status || 'Pushed changes to remote');
         } catch (_) {
-            setStatus('Failed to push changes', true);
+            showGitFeedback('Failed to push changes.', true);
         } finally {
+            if (pushSpinner) pushSpinner.classList.add('hidden');
+            updateGitUI(gitStatus);
+        }
+    }
+
+    async function gitReset() {
+        if (!gitStatus.configured || !gitStatus.repoPresent) {
+            showGitFeedback('Nothing to reset.', true);
+            return;
+        }
+        if (!confirm('Discard all uncommitted changes? This cannot be undone.')) {
+            return;
+        }
+
+        const resetButton = document.getElementById('git-reset-btn');
+        const resetSpinner = document.getElementById('git-reset-spinner');
+        setElementDisabled(resetButton, true);
+        if (resetSpinner) resetSpinner.classList.remove('hidden');
+
+        try {
+            const response = await fetch(`/api/projects/${projectId}/git/reset`, {
+                method: 'POST',
+            });
+            if (!response.ok) {
+                const message = (await response.text()).trim() || 'Failed to reset changes';
+                showGitFeedback(message, true);
+                return;
+            }
+
+            const payload = await response.json();
+            const preferredFile = currentFile;
+            await reloadWorkspaceFromDisk(preferredFile);
+            await loadGitStatus(false);
+            showGitFeedback(payload.status || 'Discarded all local changes');
+        } catch (_) {
+            showGitFeedback('Failed to reset changes.', true);
+        } finally {
+            if (resetSpinner) resetSpinner.classList.add('hidden');
             updateGitUI(gitStatus);
         }
     }
@@ -3135,6 +3281,7 @@
     document.getElementById('compile-btn').addEventListener('click', compile);
     document.getElementById('sidebar-files-btn').addEventListener('click', () => selectSidebarPanel('files'));
     document.getElementById('sidebar-comments-btn').addEventListener('click', () => selectSidebarPanel('comments'));
+    document.getElementById('sidebar-git-btn').addEventListener('click', () => selectSidebarPanel('git'));
     document.getElementById('sidebar-settings-btn').addEventListener('click', () => selectSidebarPanel('settings'));
     document.getElementById('sidebar-collapse-btn').addEventListener('click', toggleSidebarCollapsed);
     applyWritePermissions();
@@ -3151,6 +3298,25 @@
     const gitPushButton = document.getElementById('git-push-btn');
     if (gitPushButton) {
         gitPushButton.addEventListener('click', gitPush);
+    }
+    const gitResetButton = document.getElementById('git-reset-btn');
+    if (gitResetButton) {
+        gitResetButton.addEventListener('click', gitReset);
+    }
+    document.getElementById('git-changed-files-toggle').addEventListener('click', () => {
+        const list = document.getElementById('git-changed-files-list');
+        const chevron = document.getElementById('git-changed-files-chevron');
+        list.classList.toggle('hidden');
+        chevron.style.transform = list.classList.contains('hidden') ? '' : 'rotate(90deg)';
+    });
+    const gitConfigToggle = document.getElementById('git-config-toggle');
+    if (gitConfigToggle) {
+        gitConfigToggle.addEventListener('click', () => {
+            const form = document.getElementById('git-config-form');
+            const chevron = document.getElementById('git-config-chevron');
+            form.classList.toggle('hidden');
+            chevron.style.transform = form.classList.contains('hidden') ? '' : 'rotate(90deg)';
+        });
     }
     document.getElementById('comment-scope-all').addEventListener('change', renderCommentList);
     document.getElementById('comment-use-selection-btn').addEventListener('click', () => updateCommentTargetFromEditor(true));

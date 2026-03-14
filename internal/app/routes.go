@@ -48,6 +48,7 @@ func (s *Server) setupRoutes() http.Handler {
 		r.Post("/api/projects/{id}/git/config", s.handleGitConfig)
 		r.Post("/api/projects/{id}/git/pull", s.handleGitPull)
 		r.Post("/api/projects/{id}/git/push", s.handleGitPush)
+		r.Post("/api/projects/{id}/git/reset", s.handleGitReset)
 
 		r.Get("/api/projects/{id}/files", s.handleListFiles)
 		r.Post("/api/projects/{id}/files", s.handleCreateFile)
